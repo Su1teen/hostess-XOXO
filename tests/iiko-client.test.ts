@@ -24,7 +24,13 @@ interface ClientSetup {
 
 function createClient(
   responses: Array<Response | Error>,
-  overrides: { syncEnabled?: boolean; apiKey?: string } = {},
+  overrides: {
+    syncEnabled?: boolean;
+    apiKey?: string;
+    appId?: string;
+    clientSecret?: string;
+    authPath?: string;
+  } = {},
 ): ClientSetup {
   const queue = [...responses];
   const fetchMock = vi.fn(async () => {
@@ -38,6 +44,10 @@ function createClient(
   const client = new IikoClient({
     baseUrl: 'https://api-ru.iiko.services/api/1',
     apiKey: 'apiKey' in overrides ? overrides.apiKey : 'test-api-login',
+    appId: 'appId' in overrides ? overrides.appId : 'test-app-id',
+    clientSecret:
+      'clientSecret' in overrides ? overrides.clientSecret : 'test-client-secret',
+    authPath: overrides.authPath,
     timeoutMs: 1000,
     syncEnabled: overrides.syncEnabled ?? true,
     debugRawPayloads: false,
@@ -100,6 +110,8 @@ describe('IikoClient', () => {
     const headers = init.headers as Record<string, string>;
     expect(headers.authorization).toBe('Bearer session-key-1');
     expect(JSON.stringify(attempts)).not.toContain('test-api-login');
+    expect(JSON.stringify(attempts)).not.toContain('test-app-id');
+    expect(JSON.stringify(attempts)).not.toContain('test-client-secret');
     expect(JSON.stringify(attempts)).not.toContain('session-key-1');
   });
 
@@ -220,5 +232,105 @@ describe('IikoClient', () => {
       'https://api-ru.iiko.services/api/1/stop_lists',
     ]);
     expect(urls.some((url) => /order|price|command/i.test(url))).toBe(false);
+  });
+
+  it('отправляет тело авторизации с apiLogin/appId/clientSecret и boolean-флагами', async () => {
+    const { client, fetchMock } = createClient([jsonResponse({ token: 't' })]);
+    await client.getAccessToken();
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+    expect(body.apiLogin).toBe('test-api-login');
+    expect(body.appId).toBe('test-app-id');
+    expect(body.clientSecret).toBe('test-client-secret');
+    expect(body.returnAdditionalInfo).toBe(false);
+    expect(body.includeDisabled).toBe(false);
+    // Тело использует apiLogin, не apiKey.
+    expect(body.apiKey).toBeUndefined();
+    // Флаги — настоящие boolean, не строки.
+    expect(typeof body.returnAdditionalInfo).toBe('boolean');
+    expect(typeof body.includeDisabled).toBe('boolean');
+  });
+
+  it('строит URL авторизации без дублирования /api/1', async () => {
+    const { client, fetchMock } = createClient([jsonResponse({ token: 't' })]);
+    await client.getAccessToken();
+    const authUrl = String(fetchMock.mock.calls[0]?.[0]);
+    expect(authUrl).toBe('https://api-ru.iiko.services/api/1/access_token');
+    expect(authUrl.match(/\/api\/1/g)?.length).toBe(1);
+  });
+
+  it('использует IIKO_AUTH_PATH для построения URL авторизации', async () => {
+    const { client, fetchMock } = createClient([jsonResponse({ token: 't' })], {
+      authPath: '/access_token',
+    });
+    await client.getAccessToken();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      'https://api-ru.iiko.services/api/1/access_token',
+    );
+  });
+
+  it('isConfigured требует apiLogin, appId и clientSecret', async () => {
+    const onlyLogin = createClient([], { appId: undefined, clientSecret: undefined });
+    expect(onlyLogin.client.isConfigured).toBe(false);
+
+    const onlyLoginAndApp = createClient([], { clientSecret: undefined });
+    expect(onlyLoginAndApp.client.isConfigured).toBe(false);
+
+    const all = createClient([]);
+    expect(all.client.isConfigured).toBe(true);
+  });
+
+  it('diagnoseAuth возвращает безопасную диагностику без токена и секретов', async () => {
+    const { client, fetchMock } = createClient([
+      jsonResponse({ token: 'session-key', correlationId: 'corr-123' }, 200),
+    ]);
+    const diag = await client.diagnoseAuth();
+
+    expect(diag.method).toBe('POST');
+    expect(diag.finalUrl).toBe('https://api-ru.iiko.services/api/1/access_token');
+    expect(diag.apiLoginConfigured).toBe(true);
+    expect(diag.appIdConfigured).toBe(true);
+    expect(diag.clientSecretConfigured).toBe(true);
+    expect(diag.upstream.httpStatus).toBe(200);
+    expect(diag.upstream.correlationId).toBe('corr-123');
+    expect(diag.upstream.error).toBeNull();
+
+    // Токен и секреты не попадают в диагностику.
+    const serialized = JSON.stringify(diag);
+    expect(serialized).not.toContain('session-key');
+    expect(serialized).not.toContain('test-api-login');
+    expect(serialized).not.toContain('test-app-id');
+    expect(serialized).not.toContain('test-client-secret');
+
+    // Тело запроса содержит секреты, но диагностика их не раскрывает.
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(String(init.body)).toContain('test-client-secret');
+  });
+
+  it('diagnoseAuth фиксирует upstream HTTP-статус и correlationId при ошибке', async () => {
+    const { client } = createClient([
+      jsonResponse(
+        { errorDescription: 'Invalid credentials', correlationId: 'corr-err-1' },
+        401,
+      ),
+    ]);
+    const diag = await client.diagnoseAuth();
+
+    expect(diag.upstream.httpStatus).toBe(401);
+    expect(diag.upstream.correlationId).toBe('corr-err-1');
+    expect(diag.upstream.error).toContain('Invalid credentials');
+    // Не выбрасывает, возвращает безопасный объект.
+    expect(diag.apiLoginConfigured).toBe(true);
+  });
+
+  it('diagnoseAuth сообщает о незавершённых учётных данных без запроса', async () => {
+    const { client, fetchMock } = createClient([], { appId: undefined });
+    const diag = await client.diagnoseAuth();
+
+    expect(diag.appIdConfigured).toBe(false);
+    expect(diag.upstream.httpStatus).toBeNull();
+    expect(diag.upstream.error).toMatch(/настроены/);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

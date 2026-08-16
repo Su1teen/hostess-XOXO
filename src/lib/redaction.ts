@@ -8,6 +8,8 @@ export const LOG_REDACT_PATHS = [
   'res.headers["set-cookie"]',
   'apiKey',
   'apiLogin',
+  'appId',
+  'clientSecret',
   'token',
   'accessToken',
   'password',
@@ -15,10 +17,15 @@ export const LOG_REDACT_PATHS = [
   'DATABASE_URL',
   'databaseUrl',
   'IIKO_API_KEY',
+  'IIKO_APP_ID',
+  'IIKO_CLIENT_SECRET',
   'ADMIN_API_KEY',
   'TELEGRAM_BOT_TOKEN',
   'FRONT_PLUGIN_SHARED_SECRET',
   '*.apiKey',
+  '*.apiLogin',
+  '*.appId',
+  '*.clientSecret',
   '*.token',
   '*.accessToken',
   '*.password',
@@ -26,7 +33,7 @@ export const LOG_REDACT_PATHS = [
 ];
 
 const SENSITIVE_KEY_PATTERN =
-  /(api[-_]?key|api[-_]?login|token|secret|password|authorization|database_url|connection[-_]?string)/i;
+  /(api[-_]?key|api[-_]?login|app[-_]?id|client[-_]?secret|token|secret|password|authorization|database_url|connection[-_]?string)/i;
 
 const MAX_DEPTH = 6;
 

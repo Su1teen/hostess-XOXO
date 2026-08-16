@@ -20,6 +20,12 @@ import { redactDeep, sanitizeMessage } from '../lib/redaction.js';
 export interface IikoClientOptions {
   baseUrl: string;
   apiKey?: string;
+  appId?: string;
+  clientSecret?: string;
+  /** Путь авторизации относительно baseUrl, по умолчанию /access_token. */
+  authPath?: string;
+  authReturnAdditionalInfo?: boolean;
+  authIncludeDisabled?: boolean;
   timeoutMs: number;
   syncEnabled: boolean;
   debugRawPayloads: boolean;
@@ -98,6 +104,25 @@ export interface IikoTestConnectionResult {
   durationMs: number;
 }
 
+/**
+ * Безопасный результат диагностики авторизации iiko.
+ * Никогда не содержит значений секретов, apiLogin, токена или тела запроса.
+ */
+export interface IikoAuthDiagnostics {
+  finalUrl: string;
+  method: 'POST';
+  apiLoginConfigured: boolean;
+  appIdConfigured: boolean;
+  clientSecretConfigured: boolean;
+  syncEnabled: boolean;
+  upstream: {
+    httpStatus: number | null;
+    correlationId: string | null;
+    error: string | null;
+  };
+  durationMs: number;
+}
+
 interface TokenState {
   token: string;
   expiresAtMs: number;
@@ -114,6 +139,8 @@ export class IikoClient {
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
   private readonly rootUrl: string;
+  private readonly authUrl: string;
+  private readonly authPath: string;
   private tokenState: TokenState | null = null;
   private inflightToken: Promise<string> | null = null;
 
@@ -122,10 +149,17 @@ export class IikoClient {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.now = options.now ?? (() => Date.now());
     this.rootUrl = normalizeRootUrl(options.baseUrl);
+    this.authPath = normalizeAuthPath(options.authPath ?? '/access_token');
+    this.authUrl = buildAuthUrl(options.baseUrl, this.authPath);
   }
 
   get isConfigured(): boolean {
-    return this.options.syncEnabled && Boolean(this.options.apiKey);
+    return (
+      this.options.syncEnabled &&
+      Boolean(this.options.apiKey) &&
+      Boolean(this.options.appId) &&
+      Boolean(this.options.clientSecret)
+    );
   }
 
   private ensureConfigured(): string {
@@ -135,9 +169,20 @@ export class IikoClient {
     return this.options.apiKey;
   }
 
+  /** Тело запроса авторизации; никогда не покидает клиент. */
+  private buildAuthBody(): Record<string, unknown> {
+    return {
+      apiLogin: this.options.apiKey,
+      appId: this.options.appId,
+      clientSecret: this.options.clientSecret,
+      returnAdditionalInfo: this.options.authReturnAdditionalInfo ?? false,
+      includeDisabled: this.options.authIncludeDisabled ?? false,
+    };
+  }
+
   /** Возвращает актуальный access token, обновляя его заранее при необходимости. */
   async getAccessToken(forceRefresh = false): Promise<string> {
-    const apiKey = this.ensureConfigured();
+    this.ensureConfigured();
     const safetyWindow = this.options.tokenSafetyWindowMs ?? 5 * 60 * 1000;
 
     if (
@@ -153,9 +198,9 @@ export class IikoClient {
 
     this.inflightToken = (async () => {
       const response = await this.rawRequest<{ token?: string; correlationId?: string }>(
-        '/api/1/access_token',
-        { apiLogin: apiKey },
-        { operation: 'access_token', withAuth: false },
+        this.authUrl,
+        this.buildAuthBody(),
+        { operation: 'access_token', withAuth: false, absoluteUrl: true },
       );
       const token = response.body.token;
       if (!token) {
@@ -279,6 +324,69 @@ export class IikoClient {
     this.tokenState = null;
   }
 
+  /**
+   * Безопасная диагностика авторизации iiko. Выполняет реальный POST-запрос
+   * к /access_token, но никогда не выбрасывает ошибку и не возвращает токен,
+   * apiLogin, clientSecret или тело запроса. Только факты и upstream-ответ.
+   */
+  async diagnoseAuth(): Promise<IikoAuthDiagnostics> {
+    const startedAt = this.now();
+    const apiLoginConfigured = Boolean(this.options.apiKey);
+    const appIdConfigured = Boolean(this.options.appId);
+    const clientSecretConfigured = Boolean(this.options.clientSecret);
+
+    const base: IikoAuthDiagnostics = {
+      finalUrl: this.authUrl,
+      method: 'POST',
+      apiLoginConfigured,
+      appIdConfigured,
+      clientSecretConfigured,
+      syncEnabled: this.options.syncEnabled,
+      upstream: { httpStatus: null, correlationId: null, error: null },
+      durationMs: 0,
+    };
+
+    if (!apiLoginConfigured || !appIdConfigured || !clientSecretConfigured) {
+      base.upstream.error = 'Не все учётные данные настроены (apiLogin/appId/clientSecret).';
+      base.durationMs = this.now() - startedAt;
+      return base;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
+    try {
+      const response = await this.fetchImpl(this.authUrl, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json',
+        },
+        body: JSON.stringify(this.buildAuthBody()),
+        signal: controller.signal,
+      });
+      base.upstream.httpStatus = response.status;
+      const text = await response.text();
+      const parsed = safeJsonParse(text);
+      const record = asRecord(parsed);
+      const correlationId = optionalString(record?.correlationId);
+      base.upstream.correlationId = correlationId ?? null;
+      if (!response.ok) {
+        base.upstream.error = sanitizeMessage(
+          extractIikoErrorDescription(parsed) ?? `HTTP ${response.status}`,
+        );
+      }
+    } catch (error) {
+      base.upstream.error = sanitizeMessage(
+        isAbortError(error) ? 'TIMEOUT' : errorMessageOf(error),
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+
+    base.durationMs = this.now() - startedAt;
+    return base;
+  }
+
   private async authorizedRequest<T>(
     path: string,
     payload: Record<string, unknown>,
@@ -312,11 +420,12 @@ export class IikoClient {
       token?: string;
       withAuth?: boolean;
       organizationId?: string;
+      absoluteUrl?: boolean;
     },
   ): Promise<{ body: T; httpStatus: number }> {
     const maxRetries = this.options.maxRetries ?? 2;
     const retryDelayMs = this.options.retryDelayMs ?? 250;
-    const url = `${this.rootUrl}${path}`;
+    const url = context.absoluteUrl ? path : `${this.rootUrl}${path}`;
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
@@ -324,7 +433,10 @@ export class IikoClient {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
       try {
-        const headers: Record<string, string> = { 'content-type': 'application/json' };
+        const headers: Record<string, string> = {
+          'content-type': 'application/json',
+          accept: 'application/json',
+        };
         if (context.withAuth !== false && context.token) {
           headers.authorization = `Bearer ${context.token}`;
         }
@@ -449,6 +561,27 @@ export class IikoClient {
 function normalizeRootUrl(baseUrl: string): string {
   // IIKO_API_BASE_URL исторически содержит /api/1; клиент сам выбирает версию пути.
   return baseUrl.replace(/\/+$/, '').replace(/\/api\/\d+$/, '');
+}
+
+/** Гарантирует, что путь авторизации начинается с / и не имеет trailing slash. */
+function normalizeAuthPath(path: string): string {
+  const trimmed = path.trim();
+  const withSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return withSlash.replace(/\/+$/, '') || '/';
+}
+
+/**
+ * Безопасно собирает итоговый URL авторизации из baseUrl и authPath.
+ * IIKO_API_BASE_URL=https://api-ru.iiko.services/api/1 + IIKO_AUTH_PATH=/access_token
+ * => https://api-ru.iiko.services/api/1/access_token
+ *
+ * Не дублирует /api/1: путь авторизации присоединяется как есть, без
+ * повторного добавления версии API.
+ */
+function buildAuthUrl(baseUrl: string, authPath: string): string {
+  const normalizedBase = baseUrl.replace(/\/+$/, '');
+  const normalizedPath = normalizeAuthPath(authPath);
+  return `${normalizedBase}${normalizedPath}`;
 }
 
 function safeJsonParse(text: string): unknown {

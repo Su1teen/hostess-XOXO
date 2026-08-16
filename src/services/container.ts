@@ -42,6 +42,11 @@ export function createServices(
   const iikoClient = new IikoClient({
     baseUrl: env.IIKO_API_BASE_URL,
     apiKey: env.IIKO_API_KEY,
+    appId: env.IIKO_APP_ID,
+    clientSecret: env.IIKO_CLIENT_SECRET,
+    authPath: env.IIKO_AUTH_PATH,
+    authReturnAdditionalInfo: env.IIKO_AUTH_RETURN_ADDITIONAL_INFO,
+    authIncludeDisabled: env.IIKO_AUTH_INCLUDE_DISABLED,
     timeoutMs: env.IIKO_REQUEST_TIMEOUT_MS,
     syncEnabled: env.IIKO_SYNC_ENABLED,
     debugRawPayloads: env.IIKO_DEBUG_RAW_PAYLOADS,

@@ -130,11 +130,13 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         <div class="card">
           <h2>iiko Cloud API (только чтение)</h2>
           <button id="btnIikoTest">Проверить подключение</button>
+          <button id="btnIikoAuthDiag" class="secondary">Диагностика авторизации</button>
           <button id="btnIikoOrgs" class="secondary">Синхронизировать организации</button>
           <button id="btnIikoMenu" class="secondary">Синхронизировать меню</button>
           <label for="orgSelect">Организация</label>
           <select id="orgSelect"><option value="">— загрузите организации —</option></select>
           <button id="btnSelectOrg" class="secondary">Выбрать организацию</button>
+          <div id="iikoAuthDiag" style="margin-top: 12px"></div>
         </div>
 
         <div class="card">
@@ -390,6 +392,44 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         el('btnIikoTest').addEventListener('click', function () {
           silent(request('POST', '/api/v1/admin/iiko/test-connection'));
         });
+        el('btnIikoAuthDiag').addEventListener('click', function () {
+          silent(
+            request('GET', '/api/v1/admin/iiko/auth-diagnostics').then(renderIikoAuthDiag),
+          );
+        });
+
+        function renderIikoAuthDiag(data) {
+          var box = el('iikoAuthDiag');
+          if (!data) { box.innerHTML = '<p class="muted">Нет данных.</p>'; return; }
+          var upstream = data.upstream || {};
+          var status = upstream.httpStatus;
+          var statusCell = status === null
+            ? '<span class="status warn">нет ответа</span>'
+            : (status >= 200 && status < 300
+              ? '<span class="status ok">' + escapeHtml(status) + '</span>'
+              : '<span class="status err">' + escapeHtml(status) + '</span>');
+          var rows = [
+            ['URL', escapeHtml(data.finalUrl), false],
+            ['Метод', escapeHtml(data.method), false],
+            ['apiLogin настроен', flag(data.apiLoginConfigured), true],
+            ['appId настроен', flag(data.appIdConfigured), true],
+            ['clientSecret настроен', flag(data.clientSecretConfigured), true],
+            ['Синхронизация включена', flag(data.syncEnabled), true],
+            ['Upstream HTTP статус', statusCell, false],
+            ['Upstream correlationId', upstream.correlationId ? escapeHtml(upstream.correlationId) : '—', false],
+            ['Ошибка', upstream.error ? escapeHtml(upstream.error) : '—', false],
+            ['Длительность, мс', escapeHtml(data.durationMs), false],
+          ];
+          box.innerHTML =
+            '<h2 style="margin-top:12px">Диагностика авторизации iiko</h2>' +
+            '<table><tbody>' +
+            rows
+              .map(function (row) {
+                return '<tr><th>' + row[0] + '</th><td>' + row[1] + '</td></tr>';
+              })
+              .join('') +
+            '</tbody></table>';
+        }
         el('btnIikoOrgs').addEventListener('click', function () {
           silent(request('POST', '/api/v1/admin/iiko/sync-organizations').then(loadOrganizations));
         });

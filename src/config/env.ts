@@ -46,6 +46,11 @@ export const envSchema = z
 
     IIKO_API_BASE_URL: z.string().url().default('https://api-ru.iiko.services/api/1'),
     IIKO_API_KEY: optionalString,
+    IIKO_APP_ID: optionalString,
+    IIKO_CLIENT_SECRET: optionalString,
+    IIKO_AUTH_PATH: z.string().default('/access_token'),
+    IIKO_AUTH_RETURN_ADDITIONAL_INFO: booleanFromString,
+    IIKO_AUTH_INCLUDE_DISABLED: booleanFromString,
     IIKO_ORGANIZATION_ID: optionalString,
     IIKO_TERMINAL_GROUP_ID: optionalString,
     IIKO_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(15000),
@@ -76,6 +81,20 @@ export const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ['IIKO_API_KEY'],
         message: 'IIKO_API_KEY обязателен при IIKO_SYNC_ENABLED=true',
+      });
+    }
+    if (value.IIKO_SYNC_ENABLED && !value.IIKO_APP_ID) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['IIKO_APP_ID'],
+        message: 'IIKO_APP_ID обязателен при IIKO_SYNC_ENABLED=true',
+      });
+    }
+    if (value.IIKO_SYNC_ENABLED && !value.IIKO_CLIENT_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['IIKO_CLIENT_SECRET'],
+        message: 'IIKO_CLIENT_SECRET обязателен при IIKO_SYNC_ENABLED=true',
       });
     }
     if (value.TELEGRAM_ENABLED && (!value.TELEGRAM_BOT_TOKEN || !value.TELEGRAM_ALERT_CHAT_ID)) {

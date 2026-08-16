@@ -60,6 +60,9 @@ export async function diagnosticsRoutes(app: FastifyInstance): Promise<void> {
           baseUrl: app.env.IIKO_API_BASE_URL,
           syncEnabled: app.env.IIKO_SYNC_ENABLED,
           apiKey: maskPresence(app.env.IIKO_API_KEY),
+          appId: maskPresence(app.env.IIKO_APP_ID),
+          clientSecret: maskPresence(app.env.IIKO_CLIENT_SECRET),
+          authPath: app.env.IIKO_AUTH_PATH,
           organizationIdFromEnv: maskPresence(app.env.IIKO_ORGANIZATION_ID),
           terminalGroupIdFromEnv: maskPresence(app.env.IIKO_TERMINAL_GROUP_ID),
           debugRawPayloads: app.env.IIKO_DEBUG_RAW_PAYLOADS,
@@ -125,6 +128,24 @@ export async function diagnosticsRoutes(app: FastifyInstance): Promise<void> {
         },
       };
     },
+  );
+
+  app.get(
+    `${API_PREFIX}/admin/iiko/auth-diagnostics`,
+    {
+      preHandler: app.requireAdmin,
+      schema: {
+        tags: ['Admin Diagnostics'],
+        summary: 'Диагностика авторизации iiko (без раскрытия секретов)',
+        description:
+          'Выполняет реальный POST-запрос к /access_token и возвращает только безопасные факты: ' +
+          'итоговый URL, метод, факты настройки учётных данных, upstream HTTP-статус, correlationId ' +
+          'и безопасное сообщение об ошибке. Значения секретов, apiLogin, токена и тела запроса ' +
+          'никогда не возвращаются.',
+        security: [{ adminApiKey: [] }],
+      },
+    },
+    async () => app.services.iikoClient.diagnoseAuth(),
   );
 }
 
