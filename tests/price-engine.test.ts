@@ -1,0 +1,110 @@
+import { describe, expect, it } from 'vitest';
+import { AppError } from '../src/lib/errors.js';
+import { calculateNextPrice } from '../src/services/price-engine.service.js';
+
+function request(overrides: Partial<Parameters<typeof calculateNextPrice>[0]> = {}) {
+  return calculateNextPrice({
+    productId: 'p1',
+    productName: 'Gin Tonic',
+    currentPrice: 3000,
+    basePrice: 3000,
+    minPrice: 2000,
+    maxPrice: 4000,
+    priceStep: 50,
+    maxChangePercent: 10,
+    demandScore: 0,
+    salesQuantity: 0,
+    ...overrides,
+  });
+}
+
+describe('calculateNextPrice', () => {
+  it('нулевой спрос не меняет цену', () => {
+    const calculation = request({ demandScore: 0 });
+    expect(calculation.calculatedPrice.toString()).toBe('3000');
+    expect(calculation.changePercent.toNumber()).toBe(0);
+  });
+
+  it('округляет результат до шага 50 ₸', () => {
+    // 3000 * (1 + 0.2 * 0.1) = 3060 -> шаг 50 -> 3050
+    const calculation = request({ demandScore: 0.1 });
+    expect(calculation.calculatedPrice.toString()).toBe('3050');
+    expect(Number(calculation.calculatedPrice.toString()) % 50).toBe(0);
+  });
+
+  it('не поднимает цену выше maxPrice', () => {
+    const calculation = request({ currentPrice: 3950, maxPrice: 4000, demandScore: 1 });
+    expect(calculation.calculatedPrice.toString()).toBe('4000');
+    expect(calculation.result.clampedByMax).toBe(true);
+  });
+
+  it('не опускает цену ниже minPrice', () => {
+    const calculation = request({ currentPrice: 2050, minPrice: 2000, demandScore: -1 });
+    expect(calculation.calculatedPrice.toString()).toBe('2000');
+    expect(calculation.result.clampedByMin).toBe(true);
+  });
+
+  it('ограничивает большое изменение maxChangePercent', () => {
+    // demandScore = 1 даёт +20%, но maxChangePercent = 10 разрешает только 3300.
+    const calculation = request({ demandScore: 1, maxChangePercent: 10 });
+    expect(calculation.calculatedPrice.toString()).toBe('3300');
+    expect(calculation.result.clampedByMaxChangePercent).toBe(true);
+    expect(calculation.changePercent.toNumber()).toBeCloseTo(10, 4);
+  });
+
+  it('округление до шага не выводит цену за maxChangePercent', () => {
+    // 2900 + 10% = 3190; округление «половина вверх» дало бы 3200 (+10.34%).
+    const calculation = request({
+      currentPrice: 2900,
+      basePrice: 2900,
+      maxPrice: 5000,
+      demandScore: 1,
+      maxChangePercent: 10,
+    });
+    expect(calculation.calculatedPrice.toString()).toBe('3150');
+    expect(calculation.changePercent.toNumber()).toBeLessThanOrEqual(10);
+  });
+
+  it('использует fallback-диапазон basePrice ±20%, если min/max не заданы', () => {
+    const calculation = request({ minPrice: null, maxPrice: null });
+    expect(calculation.minPrice.toString()).toBe('2400');
+    expect(calculation.maxPrice.toString()).toBe('3600');
+    expect(calculation.input.fallbackRangeUsed).toBe(true);
+    expect(calculation.result.warnings.length).toBeGreaterThan(0);
+  });
+
+  it('снижает цену при отрицательном спросе', () => {
+    // 3000 * (1 - 0.2 * 0.5) = 2700
+    const calculation = request({ demandScore: -0.5, maxChangePercent: 20 });
+    expect(calculation.calculatedPrice.toString()).toBe('2700');
+    expect(calculation.changePercent.toNumber()).toBeCloseTo(-10, 4);
+  });
+
+  it('возвращает безопасную ошибку валидации при нулевой цене и базе', () => {
+    expect(() => request({ currentPrice: 0, basePrice: 0 })).toThrow(AppError);
+    try {
+      request({ currentPrice: 0, basePrice: 0 });
+    } catch (error) {
+      expect(error).toBeInstanceOf(AppError);
+      expect((error as AppError).code).toBe('VALIDATION_ERROR');
+      expect((error as AppError).statusCode).toBe(400);
+    }
+  });
+
+  it('отклоняет некорректный шаг и перевёрнутый диапазон', () => {
+    expect(() => request({ priceStep: 0 })).toThrow(AppError);
+    expect(() => request({ minPrice: 4000, maxPrice: 2000 })).toThrow(AppError);
+    expect(() => request({ maxChangePercent: -5 })).toThrow(AppError);
+  });
+
+  it('отклоняет demandScore вне диапазона [-1, 1]', () => {
+    expect(() => request({ demandScore: 2 })).toThrow(AppError);
+    expect(() => request({ demandScore: -2 })).toThrow(AppError);
+  });
+
+  it('фиксирует версию алгоритма и валюту в расчёте', () => {
+    const calculation = request();
+    expect(calculation.input.algorithmVersion).toBe('v0.1-linear-demand');
+    expect(calculation.result.currency).toBe('KZT');
+  });
+});
