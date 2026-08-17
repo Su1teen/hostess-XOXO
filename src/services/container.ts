@@ -46,7 +46,7 @@ export function createServices(
     appId: env.IIKO_APP_ID,
     clientSecret: env.IIKO_CLIENT_SECRET,
     authPath: env.IIKO_AUTH_PATH,
-    menuPath: env.IIKO_MENU_PATH,
+    menuPath: env.IIKO_MENU_BY_ID_PATH,
     authReturnAdditionalInfo: env.IIKO_AUTH_RETURN_ADDITIONAL_INFO,
     authIncludeDisabled: env.IIKO_AUTH_INCLUDE_DISABLED,
     externalMenuId: env.IIKO_EXTERNAL_MENU_ID,

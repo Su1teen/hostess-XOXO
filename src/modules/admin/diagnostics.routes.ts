@@ -65,7 +65,7 @@ export async function diagnosticsRoutes(app: FastifyInstance): Promise<void> {
           appId: maskPresence(app.env.IIKO_APP_ID),
           clientSecret: maskPresence(app.env.IIKO_CLIENT_SECRET),
           authPath: app.env.IIKO_AUTH_PATH,
-          menuPath: app.env.IIKO_MENU_PATH,
+          menuByIdPath: app.env.IIKO_MENU_BY_ID_PATH,
           organizationIdFromEnv: maskPresence(app.env.IIKO_ORGANIZATION_ID),
           externalMenuIdFromEnv: maskPresence(app.env.IIKO_EXTERNAL_MENU_ID),
           terminalGroupIdFromEnv: maskPresence(app.env.IIKO_TERMINAL_GROUP_ID),

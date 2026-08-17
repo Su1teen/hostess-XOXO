@@ -1,8 +1,16 @@
 /**
- * Чистый парсер внешнего меню iiko (ответ POST /api/2/menu).
+ * Чистый парсер полного внешнего меню iiko (ответ POST /api/2/menu/by_id).
  *
  * Не выполняет сетевых запросов и не логирует сырое тело меню.
- * Извлекает только sellable item-size-price variants:
+ *
+ * Фактическая структура ответа /api/2/menu/by_id:
+ *   {
+ *     correlationId,
+ *     productCategories: [{ id, name, isDeleted? }],
+ *     itemCategories: [{ items: [{ id, name, sku?, productCategoryId?, itemSizes: [...] }] }]
+ *   }
+ *
+ * Извлекает sellable item-size-price variants:
  *   - товар не hidden/disabled/archived (когда флаги есть);
  *   - товар имеет itemSizes;
  *   - размер имеет хотя бы одну валидную числовую цену > 0;
@@ -11,6 +19,9 @@
  *
  * Каждый item + size + валидная цена = отдельная нормализованная строка-вариант.
  * Max-price collapse НЕ используется: товар с размерами 0.3L и 0.5L = две строки.
+ * Если у размера несколько положительных цен и нельзя однозначно выбрать
+ * (нет организации-матча и цен больше одной) — размер пропускается с warning,
+ * без произвольного выбора max price.
  */
 
 export interface ParsedMenuVariant {
@@ -39,13 +50,14 @@ export interface ParsedMenuResult {
   correlationId: string | null;
   sourceExternalMenuId: string | null;
   sourceMenuId: string | null;
-  categoryCount: number;
+  sourceCategoryCount: number;
   sourceItemCount: number;
   variants: ParsedMenuVariant[];
   skippedNoSizes: number;
   skippedHidden: number;
   skippedZeroPrice: number;
   skippedMalformedPrice: number;
+  skippedAmbiguousPrice: number;
   warnings: string[];
 }
 
@@ -58,11 +70,8 @@ export interface ParseMenuOptions {
 }
 
 /**
- * Разбирает сырой ответ /api/2/menu и извлекает sellable variants.
- * Формат ответа iiko может варьировать — парсер защищённо читает
- * категории из `groups`/`itemCategories`/`categories`, а товары из
- * `items`/`products`. Поле цены может быть как `price`, так и вложенным
- * `price.currentPrice`/`price.price`.
+ * Разбирает сырой ответ /api/2/menu/by_id и извлекает sellable variants.
+ * Защищённо читает productCategories (id -> name) и itemCategories[].items[].
  */
 export function parseExternalMenu(
   raw: unknown,
@@ -72,36 +81,54 @@ export function parseExternalMenu(
   const warnings: string[] = [];
 
   const correlationId = optionalString(root?.correlationId) ?? null;
-  const sourceExternalMenuId = options.externalMenuId ?? optionalString(root?.externalMenuId) ?? null;
+  const sourceExternalMenuId =
+    options.externalMenuId ?? optionalString(root?.externalMenuId) ?? null;
   const sourceMenuId = optionalString(root?.id) ?? optionalString(root?.menuId) ?? null;
 
-  // Карта категорий: id -> name. Источники могут называться по-разному.
+  // Карта категорий: productCategories[].id -> name.
+  // Также читаем альтернативные имена полей на случай вариаций API.
   const categoryMap = new Map<string, string>();
-  const categorySources = [
-    asArray(root?.groups),
-    asArray(root?.itemCategories),
-    asArray(root?.categories),
-  ];
-  for (const list of categorySources) {
-    for (const entry of list) {
-      const record = asRecord(entry);
-      const id = optionalString(record?.id);
-      const name = optionalString(record?.name) ?? optionalString(record?.title);
-      if (id && name) categoryMap.set(id, name);
+  const deletedCategoryIds = new Set<string>();
+  for (const entry of asArray(root?.productCategories)) {
+    const record = asRecord(entry);
+    const id = optionalString(record?.id);
+    const name = optionalString(record?.name) ?? optionalString(record?.title);
+    if (id && name) {
+      categoryMap.set(id, name);
+      if (isFlagTrue(record?.isDeleted) || isFlagTrue(record?.hidden)) {
+        deletedCategoryIds.add(id);
+      }
+    }
+  }
+  // Запасные источники категорий.
+  for (const entry of asArray(root?.itemCategories)) {
+    const record = asRecord(entry);
+    const id = optionalString(record?.id);
+    const name = optionalString(record?.name) ?? optionalString(record?.title);
+    if (id && name && !categoryMap.has(id)) {
+      categoryMap.set(id, name);
     }
   }
 
-  // Товары: items / products.
-  const itemLists = [asArray(root?.items), asArray(root?.products)];
+  // Товары живут ВНУТРИ itemCategories[].items[] (НЕ в корневом items).
   const items: unknown[] = [];
-  for (const list of itemLists) {
-    for (const item of list) items.push(item);
+  for (const categoryRaw of asArray(root?.itemCategories)) {
+    const category = asRecord(categoryRaw);
+    if (isFlagTrue(category?.isDeleted) || isFlagTrue(category?.hidden)) continue;
+    for (const item of asArray(category?.items)) {
+      items.push(item);
+    }
+  }
+  // На случай альтернативной формы с корневым items — читаем и его.
+  for (const item of asArray(root?.items)) {
+    items.push(item);
   }
 
   let skippedNoSizes = 0;
   let skippedHidden = 0;
   let skippedZeroPrice = 0;
   let skippedMalformedPrice = 0;
+  let skippedAmbiguousPrice = 0;
   const variants: ParsedMenuVariant[] = [];
   const currency = options.currency ?? 'KZT';
 
@@ -114,12 +141,18 @@ export function parseExternalMenu(
     }
 
     // hidden/disabled/archived flags (когда есть).
-    if (isFlagTrue(item?.hidden) || isFlagTrue(item?.disabled) || isFlagTrue(item?.isDeleted) || isFlagTrue(item?.archived)) {
+    if (
+      isFlagTrue(item?.hidden) ||
+      isFlagTrue(item?.disabled) ||
+      isFlagTrue(item?.isDeleted) ||
+      isFlagTrue(item?.archived)
+    ) {
       skippedHidden += 1;
       continue;
     }
 
-    const itemName = optionalString(item?.name) ?? optionalString(item?.title) ?? 'Без названия';
+    const itemName =
+      optionalString(item?.name) ?? optionalString(item?.title) ?? 'Без названия';
     const sku = optionalString(item?.sku) ?? optionalString(item?.code) ?? null;
     const categoryId =
       optionalString(item?.productCategoryId) ??
@@ -127,6 +160,10 @@ export function parseExternalMenu(
       optionalString(item?.parentGroup) ??
       null;
     const categoryName = categoryId ? (categoryMap.get(categoryId) ?? null) : null;
+    if (categoryId && deletedCategoryIds.has(categoryId)) {
+      skippedHidden += 1;
+      continue;
+    }
 
     const sizes = asArray(item?.itemSizes);
     if (sizes.length === 0) {
@@ -147,10 +184,7 @@ export function parseExternalMenu(
         optionalString(sizeRaw?.sizeName) ??
         optionalString(sizeRaw?.title) ??
         null;
-      const sizeCode =
-        optionalString(sizeRaw?.sizeCode) ??
-        optionalString(sizeRaw?.code) ??
-        null;
+      const sizeCode = optionalString(sizeRaw?.sizeCode) ?? optionalString(sizeRaw?.code) ?? null;
 
       const prices = asArray(sizeRaw?.prices);
       if (prices.length === 0) {
@@ -158,54 +192,24 @@ export function parseExternalMenu(
         continue;
       }
 
-      // Берём первую валидную цену, принадлежащую организации (если список есть).
-      // НЕ схлопываем несколько цен в max — каждый size = одна строка с первой подходящей ценой.
-      let chosenPrice: number | null = null;
-      let priceMatchedOrg = true;
-      let malformed = false;
-      for (const priceRaw of prices) {
-        const priceRecord = asRecord(priceRaw);
-        const candidate = readPrice(priceRecord);
-        if (candidate === null) {
-          malformed = true;
-          continue;
-        }
-        if (!(candidate > 0)) {
-          // null/0/отрицательные/NaN — пропускаем эту цену.
-          continue;
-        }
-        const orgs = asArray(priceRecord?.organizations);
-        if (orgs.length > 0) {
-          const belongs = orgs.some(
-            (org) => optionalString(asRecord(org)?.id) === options.organizationId,
-          );
-          if (!belongs) {
-            priceMatchedOrg = false;
-            continue;
-          }
-        }
-        chosenPrice = candidate;
-        break;
+      const chosen = choosePrice(prices, options.organizationId, warnings, itemId, sizeId);
+      if (chosen.kind === 'zero') {
+        skippedZeroPrice += 1;
+        continue;
       }
-
-      if (chosenPrice === null) {
-        if (malformed) {
-          skippedMalformedPrice += 1;
-        } else {
-          skippedZeroPrice += 1;
-        }
-        if (!priceMatchedOrg) {
-          warnings.push(
-            `item ${itemId} size ${sizeId}: цена не принадлежит организации ${options.organizationId}`,
-          );
-        }
+      if (chosen.kind === 'malformed') {
+        skippedMalformedPrice += 1;
+        continue;
+      }
+      if (chosen.kind === 'ambiguous') {
+        skippedAmbiguousPrice += 1;
         continue;
       }
 
       const displayName = buildDisplayName(itemName, sizeName);
       const variantWarnings: string[] = [];
-      if (!priceMatchedOrg) {
-        variantWarnings.push('price_organization_mismatch_preserved');
+      if (!chosen.orgMatched) {
+        variantWarnings.push('price_organization_match_unavailable');
       }
 
       variants.push({
@@ -220,7 +224,7 @@ export function parseExternalMenu(
         sku,
         categoryId,
         categoryName,
-        basePrice: chosenPrice,
+        basePrice: chosen.price,
         currency,
         isSellable: true,
         isAvailable: true,
@@ -237,15 +241,89 @@ export function parseExternalMenu(
     correlationId,
     sourceExternalMenuId,
     sourceMenuId,
-    categoryCount: categoryMap.size,
+    sourceCategoryCount: categoryMap.size,
     sourceItemCount: items.length,
     variants,
     skippedNoSizes,
     skippedHidden,
     skippedZeroPrice,
     skippedMalformedPrice,
+    skippedAmbiguousPrice,
     warnings,
   };
+}
+
+type PriceChoice =
+  | { kind: 'ok'; price: number; orgMatched: boolean }
+  | { kind: 'zero' }
+  | { kind: 'malformed' }
+  | { kind: 'ambiguous' };
+
+/**
+ * Выбирает применимую цену для размера.
+ * - prefer цену с organizations, содержащим organizationId;
+ * - иначе, если положительная цена единственна — берём её;
+ * - если положительных цен несколько и нет орг-матча — ambiguous (пропуск),
+ *   НЕ используем max price как каноническую.
+ */
+function choosePrice(
+  prices: unknown[],
+  organizationId: string,
+  warnings: string[],
+  itemId: string,
+  sizeId: string,
+): PriceChoice {
+  let malformed = false;
+  const orgMatches: number[] = [];
+  const positiveGeneric: number[] = [];
+
+  for (const priceRaw of prices) {
+    const priceRecord = asRecord(priceRaw);
+    const candidate = readPrice(priceRecord);
+    if (candidate === null) {
+      malformed = true;
+      continue;
+    }
+    if (!(candidate > 0)) {
+      // null/0/отрицательные/NaN — пропускаем эту цену.
+      continue;
+    }
+    const orgs = asArray(priceRecord?.organizations);
+    if (orgs.length > 0) {
+      const belongs = orgs.some(
+        (org) => optionalString(asRecord(org)?.id) === organizationId,
+      );
+      if (belongs) {
+        orgMatches.push(candidate);
+      }
+      // Цены с organizations, но не нашей — не учитываем как generic.
+    } else {
+      positiveGeneric.push(candidate);
+    }
+  }
+
+  if (orgMatches.length === 1) {
+    return { kind: 'ok', price: orgMatches[0]!, orgMatched: true };
+  }
+  if (orgMatches.length > 1) {
+    warnings.push(`item ${itemId} size ${sizeId}: несколько орг-цен — пропущено (ambiguous)`);
+    return { kind: 'ambiguous' };
+  }
+  // Нет орг-матча.
+  if (positiveGeneric.length === 1) {
+    return { kind: 'ok', price: positiveGeneric[0]!, orgMatched: false };
+  }
+  if (positiveGeneric.length > 1) {
+    warnings.push(
+      `item ${itemId} size ${sizeId}: несколько положительных цен без орг-матча — пропущено (ambiguous, max не используется)`,
+    );
+    return { kind: 'ambiguous' };
+  }
+  // Ни одной положительной цены.
+  if (malformed) {
+    return { kind: 'malformed' };
+  }
+  return { kind: 'zero' };
 }
 
 function buildDisplayName(name: string, sizeName: string | null): string {
@@ -260,7 +338,8 @@ function readPrice(priceRecord: Record<string, unknown> | undefined): number | n
   if (!priceRecord) return null;
   const direct = priceRecord.price;
   const current = asRecord(priceRecord.price)?.currentPrice;
-  const candidate = typeof direct === 'number' ? direct : typeof current === 'number' ? current : undefined;
+  const candidate =
+    typeof direct === 'number' ? direct : typeof current === 'number' ? current : undefined;
   if (candidate === undefined) return null;
   if (Number.isNaN(candidate)) return null;
   if (!Number.isFinite(candidate)) return null;

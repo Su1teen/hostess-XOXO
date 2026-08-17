@@ -19,14 +19,16 @@ export interface SyncMenuSummary {
   sourceExternalMenuId: string | null;
   sourceMenuId: string | null;
   correlationId: string | null;
-  categoryCount: number;
   sourceItemCount: number;
-  variantsExtracted: number;
+  sourceCategoryCount: number;
+  extractedVariantCount: number;
   skippedNoSizes: number;
   skippedHidden: number;
-  skippedZeroPrice: number;
-  skippedMalformedPrice: number;
-  savedOrUpdate: number;
+  skippedZeroPriceCount: number;
+  skippedMalformedCount: number;
+  skippedAmbiguousCount: number;
+  savedCount: number;
+  updatedCount: number;
   unavailableCount: number;
   durationMs: number;
   success: boolean;
@@ -176,7 +178,7 @@ export class IikoSyncService {
   }
 
   /**
-   * Синхронизация внешнего меню iiko (POST /api/2/menu).
+   * Синхронизация полного внешнего меню iiko (POST /api/2/menu/by_id).
    * Извлекает sellable item-size-price variants, upsert их батчами,
    * помечает пропавшие недоступными. Возвращает только сводку — без сырого меню.
    */
@@ -217,7 +219,8 @@ export class IikoSyncService {
 
     const syncedAt = new Date();
     const seenKeys = new Set<string>();
-    let savedOrUpdate = 0;
+    let savedCount = 0;
+    let updatedCount = 0;
 
     // Upsert батчами без одной гигантской транзакции.
     for (let i = 0; i < parsed.variants.length; i += SYNC_BATCH_SIZE) {
@@ -226,6 +229,16 @@ export class IikoSyncService {
         const key = `${variant.organizationId}|${variant.iikoItemId}|${variant.iikoSizeId}`;
         seenKeys.add(key);
         const basePrice = toMoney(variant.basePrice.toString());
+        const existing = await this.prisma.product.findUnique({
+          where: {
+            organizationId_iikoItemId_iikoSizeId: {
+              organizationId: organization.id,
+              iikoItemId: variant.iikoItemId,
+              iikoSizeId: variant.iikoSizeId,
+            },
+          },
+          select: { id: true, basePrice: true },
+        });
         const upsertData = {
           iikoSizeId: variant.iikoSizeId,
           iikoProductId: variant.iikoProductId,
@@ -236,7 +249,6 @@ export class IikoSyncService {
           sku: variant.sku,
           categoryId: variant.categoryId,
           categoryName: variant.categoryName,
-          basePrice: basePrice.toString(),
           currentKnownIikoPrice: basePrice.toString(),
           currency: variant.currency,
           isSellable: variant.isSellable,
@@ -263,6 +275,7 @@ export class IikoSyncService {
           create: {
             organizationId: organization.id,
             iikoItemId: variant.iikoItemId,
+            basePrice: basePrice.toString(),
             priceStep: this.env.PRICE_DEFAULT_STEP.toString(),
             maxChangePercent: this.env.PRICE_MAX_CHANGE_PERCENT.toString(),
             ...upsertData,
@@ -270,10 +283,15 @@ export class IikoSyncService {
           update: {
             ...upsertData,
             // basePrice администратор настраивает вручную; перезаписываем только если он ещё нулевой.
-            basePrice: undefined,
+            basePrice:
+              existing && existing.basePrice.isZero() ? basePrice.toString() : undefined,
           },
         });
-        savedOrUpdate += 1;
+        if (existing) {
+          updatedCount += 1;
+        } else {
+          savedCount += 1;
+        }
       }
     }
 
@@ -307,14 +325,16 @@ export class IikoSyncService {
       sourceExternalMenuId: parsed.sourceExternalMenuId,
       sourceMenuId: parsed.sourceMenuId,
       correlationId: parsed.correlationId,
-      categoryCount: parsed.categoryCount,
       sourceItemCount: parsed.sourceItemCount,
-      variantsExtracted: parsed.variants.length,
+      sourceCategoryCount: parsed.sourceCategoryCount,
+      extractedVariantCount: parsed.variants.length,
       skippedNoSizes: parsed.skippedNoSizes,
       skippedHidden: parsed.skippedHidden,
-      skippedZeroPrice: parsed.skippedZeroPrice,
-      skippedMalformedPrice: parsed.skippedMalformedPrice,
-      savedOrUpdate,
+      skippedZeroPriceCount: parsed.skippedZeroPrice,
+      skippedMalformedCount: parsed.skippedMalformedPrice,
+      skippedAmbiguousCount: parsed.skippedAmbiguousPrice,
+      savedCount,
+      updatedCount,
       unavailableCount: unavailable.count,
       durationMs: Date.now() - startedAt,
       success: true,
@@ -350,14 +370,16 @@ export class IikoSyncService {
       sourceExternalMenuId: externalMenuId,
       sourceMenuId: null,
       correlationId,
-      categoryCount: 0,
       sourceItemCount: 0,
-      variantsExtracted: 0,
+      sourceCategoryCount: 0,
+      extractedVariantCount: 0,
       skippedNoSizes: 0,
       skippedHidden: 0,
-      skippedZeroPrice: 0,
-      skippedMalformedPrice: 0,
-      savedOrUpdate: 0,
+      skippedZeroPriceCount: 0,
+      skippedMalformedCount: 0,
+      skippedAmbiguousCount: 0,
+      savedCount: 0,
+      updatedCount: 0,
       unavailableCount: 0,
       durationMs,
       success: false,
@@ -373,13 +395,15 @@ export class IikoSyncService {
     // Сводка без сырого тела меню.
     const safeMetadata = {
       sourceItemCount: summary.sourceItemCount,
-      categoryCount: summary.categoryCount,
-      variantsExtracted: summary.variantsExtracted,
+      sourceCategoryCount: summary.sourceCategoryCount,
+      extractedVariantCount: summary.extractedVariantCount,
       skippedNoSizes: summary.skippedNoSizes,
       skippedHidden: summary.skippedHidden,
-      skippedZeroPrice: summary.skippedZeroPrice,
-      skippedMalformedPrice: summary.skippedMalformedPrice,
-      savedOrUpdate: summary.savedOrUpdate,
+      skippedZeroPriceCount: summary.skippedZeroPriceCount,
+      skippedMalformedCount: summary.skippedMalformedCount,
+      skippedAmbiguousCount: summary.skippedAmbiguousCount,
+      savedCount: summary.savedCount,
+      updatedCount: summary.updatedCount,
       unavailableCount: summary.unavailableCount,
       durationMs: summary.durationMs,
       correlationId: summary.correlationId,
@@ -392,7 +416,7 @@ export class IikoSyncService {
       organizationId,
       requestId: requestId ?? null,
       summary: summary.success
-        ? `Синхронизация меню: ${summary.variantsExtracted} вариантов, ${summary.sourceItemCount} товаров, ${summary.categoryCount} категорий`
+        ? `Синхронизация меню: ${summary.extractedVariantCount} вариантов, ${summary.sourceItemCount} товаров, ${summary.sourceCategoryCount} категорий`
         : `Синхронизация меню не удалась: ${summary.error ?? 'ошибка'}`,
       metadata: safeMetadata,
     });

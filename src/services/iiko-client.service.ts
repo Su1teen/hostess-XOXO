@@ -28,7 +28,7 @@ export interface IikoClientOptions {
   clientSecret?: string;
   /** Путь авторизации относительно authBaseUrl, по умолчанию /access_token. */
   authPath?: string;
-  /** Путь запроса меню относительно menuBaseUrl, по умолчанию /menu. */
+  /** Путь запроса меню относительно menuBaseUrl, по умолчанию /menu/by_id. */
   menuPath?: string;
   authReturnAdditionalInfo?: boolean;
   authIncludeDisabled?: boolean;
@@ -151,7 +151,7 @@ export class IikoClient {
     const menuBase = normalizeBase(options.menuBaseUrl);
     this.apiRoot = stripApiVersion(authBase);
     this.authUrl = `${authBase}${normalizePath(options.authPath ?? '/access_token')}`;
-    this.menuUrl = `${menuBase}${normalizePath(options.menuPath ?? '/menu')}`;
+    this.menuUrl = `${menuBase}${normalizePath(options.menuPath ?? '/menu/by_id')}`;
   }
 
   get isConfigured(): boolean {
@@ -231,10 +231,11 @@ export class IikoClient {
   }
 
   /**
-   * Внешнее меню iiko: POST {menuUrl} (= {IIKO_MENU_BASE_URL}/menu = /api/2/menu).
+   * Полное внешнее меню iiko: POST {menuUrl} (= /api/2/menu/by_id).
    * Тело: { externalMenuId, organizationIds: [organizationId] }.
    * Токен получается автоматически и кэшируется только в памяти.
    * Возвращает сырой распарсенный JSON меню; логирование тела отключено.
+   * НЕ использовать /api/v2/menu или /api/1/nomenclature для полной синхронизации.
    */
   async getExternalMenu(
     organizationId: string,
@@ -247,7 +248,7 @@ export class IikoClient {
     const { body } = await this.authorizedRequest<unknown>(
       this.menuUrl,
       { externalMenuId: menuId, organizationIds: [organizationId] },
-      'menu',
+      'menu_by_id',
       organizationId,
       true,
     );

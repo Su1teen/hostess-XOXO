@@ -196,11 +196,11 @@ describe('IikoClient endpoints', () => {
     expect(attempts.every((attempt) => attempt.status === 'SUCCESS')).toBe(true);
   });
 
-  it('использует только read-only пути: auth /api/v2/access_token, menu /api/2/menu, organizations /api/1/organizations', async () => {
+  it('использует только read-only пути: auth /api/v2/access_token, menu /api/2/menu/by_id, organizations /api/1/organizations', async () => {
     const { client, fetchMock } = createClient([
       jsonResponse({ token: 't' }),
       jsonResponse({ organizations: [] }),
-      jsonResponse({ items: [] }),
+      jsonResponse({ itemCategories: [] }),
     ]);
 
     await client.getOrganizations();
@@ -210,9 +210,12 @@ describe('IikoClient endpoints', () => {
     expect(urls).toEqual([
       'https://api-ru.iiko.services/api/v2/access_token',
       'https://api-ru.iiko.services/api/1/organizations',
-      'https://api-ru.iiko.services/api/2/menu',
+      'https://api-ru.iiko.services/api/2/menu/by_id',
     ]);
     expect(urls.some((url) => /order|price|command/i.test(url))).toBe(false);
+    // /api/v2/menu и /api/1/nomenclature не должны использоваться для полной синхронизации.
+    expect(urls.some((url) => url.includes('/api/v2/menu'))).toBe(false);
+    expect(urls.some((url) => url.includes('/api/1/nomenclature'))).toBe(false);
   });
 
   it('отправляет тело авторизации с apiLogin/appId/clientSecret и boolean-флагами', async () => {
@@ -251,15 +254,16 @@ describe('IikoClient endpoints', () => {
     );
   });
 
-  it('строит корректный URL меню: /api/2/menu (НЕ /api/v2/menu)', async () => {
+  it('строит корректный URL меню: /api/2/menu/by_id (НЕ /api/v2/menu и НЕ /api/1/nomenclature)', async () => {
     const { client, fetchMock } = createClient([
       jsonResponse({ token: 't' }),
-      jsonResponse({ items: [] }),
+      jsonResponse({ itemCategories: [] }),
     ]);
     await client.getExternalMenu(ORG_ID);
     const menuUrl = String(fetchMock.mock.calls[1]?.[0]);
-    expect(menuUrl).toBe('https://api-ru.iiko.services/api/2/menu');
+    expect(menuUrl).toBe('https://api-ru.iiko.services/api/2/menu/by_id');
     expect(menuUrl).not.toContain('/api/v2/menu');
+    expect(menuUrl).not.toContain('/api/1/nomenclature');
   });
 
   it('isConfigured требует apiLogin, appId и clientSecret', async () => {
@@ -273,15 +277,15 @@ describe('IikoClient endpoints', () => {
     expect(all.client.isConfigured).toBe(true);
   });
 
-  it('getExternalMenu шлёт externalMenuId + organizationIds на /api/2/menu с Bearer', async () => {
+  it('getExternalMenu шлёт externalMenuId + organizationIds на /api/2/menu/by_id с Bearer', async () => {
     const { client, fetchMock } = createClient([
       jsonResponse({ token: 't' }),
-      jsonResponse({ items: [] }),
+      jsonResponse({ itemCategories: [] }),
     ]);
     await client.getExternalMenu(ORG_ID);
 
     const menuUrl = String(fetchMock.mock.calls[1]?.[0]);
-    expect(menuUrl).toBe('https://api-ru.iiko.services/api/2/menu');
+    expect(menuUrl).toBe('https://api-ru.iiko.services/api/2/menu/by_id');
     const init = fetchMock.mock.calls[1]?.[1] as RequestInit;
     const body = JSON.parse(String(init.body));
     expect(body.externalMenuId).toBe('88042');
@@ -303,7 +307,7 @@ describe('IikoClient endpoints', () => {
     const { client, fetchMock } = createClient([
       jsonResponse({ token: 'session-key', correlationId: 'corr-auth' }, 200),
       jsonResponse({ token: 'session-key', correlationId: 'corr-auth-2' }, 200),
-      jsonResponse({ items: [], correlationId: 'corr-menu' }, 200),
+      jsonResponse({ itemCategories: [], correlationId: 'corr-menu' }, 200),
     ]);
     const diag = await client.diagnoseAuth();
 
@@ -321,7 +325,7 @@ describe('IikoClient endpoints', () => {
     expect(diag.auth.error).toBeNull();
 
     expect(diag.menu).not.toBeNull();
-    expect(diag.menu?.finalUrl).toBe('https://api-ru.iiko.services/api/2/menu');
+    expect(diag.menu?.finalUrl).toBe('https://api-ru.iiko.services/api/2/menu/by_id');
     expect(diag.menu?.httpStatus).toBe(200);
     expect(diag.menu?.correlationId).toBe('corr-menu');
     expect(diag.menu?.success).toBe(true);
@@ -403,7 +407,7 @@ describe('IikoClient endpoints', () => {
     const { client } = createClient([
       jsonResponse({ token: 'session-key', correlationId: 'c1' }, 200),
       jsonResponse({ token: 'session-key', correlationId: 'c2' }, 200),
-      jsonResponse({ items: [], correlationId: 'c3' }, 200),
+      jsonResponse({ itemCategories: [], correlationId: 'c3' }, 200),
     ]);
     const diag = await client.diagnoseAuth();
     const serialized = JSON.stringify(diag);

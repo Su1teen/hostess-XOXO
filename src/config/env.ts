@@ -54,7 +54,10 @@ export const envSchema = z
     IIKO_APP_ID: optionalString,
     IIKO_CLIENT_SECRET: optionalString,
     IIKO_AUTH_PATH: z.string().default('/access_token'),
-    IIKO_MENU_PATH: z.string().default('/menu'),
+    // Полное внешнее меню iiko: POST {IIKO_MENU_BASE_URL}{IIKO_MENU_BY_ID_PATH}
+    // -> https://api-ru.iiko.services/api/2/menu/by_id
+    // НЕ использовать /api/v2/menu или /api/1/nomenclature для полной синхронизации.
+    IIKO_MENU_BY_ID_PATH: z.string().default('/menu/by_id'),
     IIKO_AUTH_RETURN_ADDITIONAL_INFO: booleanFromString,
     IIKO_AUTH_INCLUDE_DISABLED: booleanFromString,
     IIKO_ORGANIZATION_ID: optionalString,
