@@ -564,7 +564,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
             '</tbody></table>';
           box.innerHTML = cfgTable +
             renderStageTable('Стадия 1: авторизация (/api/v2/access_token)', data.auth) +
-            renderStageTable('Стадия 2: меню (/api/v2/menu)', data.menu);
+            renderStageTable('Стадия 2: полное меню (/api/2/menu/by_id)', data.menu);
         }
         el('btnIikoOrgs').addEventListener('click', function () {
           silent(request('POST', '/api/v1/admin/iiko/sync-organizations').then(loadOrganizations));

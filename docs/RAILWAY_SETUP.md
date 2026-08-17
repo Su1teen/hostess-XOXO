@@ -52,18 +52,20 @@ APP_TIMEZONE=Asia/Almaty
 - `POST /api/v2/access_token` — авторизация по `apiLogin` + `appId` + `clientSecret`.
   Токен живёт только в памяти процесса и никогда не пишется в БД, логи, ответы,
   HTML, Swagger или audit log.
-- `POST /api/v2/menu` — запрос внешнего меню с Bearer-токеном.
+- `POST /api/2/menu/by_id` — запрос полного внешнего меню с Bearer-токеном.
   Тело: `{ externalMenuId, organizationIds: [organizationId] }`.
 
 Переменные iiko для Railway:
 
 ```env
-IIKO_API_BASE_URL=https://api-ru.iiko.services/api/v2
+IIKO_AUTH_BASE_URL=https://api-ru.iiko.services/api/v2
+IIKO_MENU_BASE_URL=https://api-ru.iiko.services/api/2
 IIKO_API_KEY=<apiLogin>
+IIKO_AUTH_API_KEY_FIELD=apiLogin
 IIKO_APP_ID=<appId>
 IIKO_CLIENT_SECRET=<clientSecret>
 IIKO_AUTH_PATH=/access_token
-IIKO_MENU_PATH=/menu
+IIKO_MENU_BY_ID_PATH=/menu/by_id
 IIKO_AUTH_RETURN_ADDITIONAL_INFO=false
 IIKO_AUTH_INCLUDE_DISABLED=false
 IIKO_ORGANIZATION_ID=<organizationId>
@@ -71,18 +73,18 @@ IIKO_EXTERNAL_MENU_ID=<externalMenuId>
 IIKO_SYNC_ENABLED=true
 ```
 
-`IIKO_API_BASE_URL` указывает на корень v2 (`/api/v2`). Пути `IIKO_AUTH_PATH`
-и `IIKO_MENU_PATH` задаются относительно базы, поэтому итоговые URL собираются
-без дублирования версии:
+Auth и menu используют отдельные базы и пути. Итоговые URL:
 
 - auth: `https://api-ru.iiko.services/api/v2/access_token`
-- menu: `https://api-ru.iiko.services/api/v2/menu`
+- menu: `https://api-ru.iiko.services/api/2/menu/by_id`
 
 Двухстадийная диагностика (auth + menu) доступна на
 `GET /api/v1/admin/iiko/auth-diagnostics` и в админ-панели (/admin). Эндпоинт
 возвращает итоговые URL, метод, upstream HTTP-статус и `correlationId` для каждой
 стадии, но никогда не раскрывает секреты, apiLogin, токен или тело запроса.
-Ошибки меню отмечаются отдельно и не маскируются под `IIKO_AUTH_FAILED`.
+Ошибки меню отмечаются отдельно как `IIKO_MENU_REQUEST_FAILED` и не маскируются под
+`IIKO_AUTH_FAILED`. Безопасные fingerprints фактического запроса доступны по
+`GET /api/v1/admin/iiko/menu-request-diagnostics`.
 
 Рекомендации:
 

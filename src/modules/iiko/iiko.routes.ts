@@ -103,7 +103,7 @@ export async function iikoRoutes(app: FastifyInstance): Promise<void> {
       preHandler: app.requireAdmin,
       schema: {
         tags: ['iiko'],
-        summary: 'Синхронизировать внешнее меню выбранной организации (/api/2/menu)',
+        summary: 'Синхронизировать внешнее меню выбранной организации (/api/2/menu/by_id)',
         description:
           'Только чтение из iiko. Извлекаются sellable item-size variants. ' +
           'Пропавшие варианты помечаются недоступными, а не удаляются. ' +
@@ -112,6 +112,22 @@ export async function iikoRoutes(app: FastifyInstance): Promise<void> {
       },
     },
     async (request) => app.services.iikoSync.syncMenu(request.id),
+  );
+
+  app.get(
+    `${API_PREFIX}/admin/iiko/menu-request-diagnostics`,
+    {
+      preHandler: app.requireAdmin,
+      schema: {
+        tags: ['iiko'],
+        summary: 'Безопасная диагностика фактического POST /api/2/menu/by_id',
+        description:
+          'Получает свежий auth token, выполняет read-only запрос полного меню и возвращает только ' +
+          'безопасные fingerprints. Токен, Authorization и сырое меню не возвращаются.',
+        security: [{ adminApiKey: [] }],
+      },
+    },
+    async () => app.services.iikoClient.diagnoseMenuRequest(),
   );
 
   app.get(

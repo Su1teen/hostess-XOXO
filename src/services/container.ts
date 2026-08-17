@@ -43,6 +43,7 @@ export function createServices(
     authBaseUrl: env.IIKO_AUTH_BASE_URL,
     menuBaseUrl: env.IIKO_MENU_BASE_URL,
     apiKey: env.IIKO_API_KEY,
+    authApiKeyField: env.IIKO_AUTH_API_KEY_FIELD,
     appId: env.IIKO_APP_ID,
     clientSecret: env.IIKO_CLIENT_SECRET,
     authPath: env.IIKO_AUTH_PATH,

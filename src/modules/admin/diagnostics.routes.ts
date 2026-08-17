@@ -62,6 +62,7 @@ export async function diagnosticsRoutes(app: FastifyInstance): Promise<void> {
           menuBaseUrl: app.env.IIKO_MENU_BASE_URL,
           syncEnabled: app.env.IIKO_SYNC_ENABLED,
           apiKey: maskPresence(app.env.IIKO_API_KEY),
+          authApiKeyField: app.env.IIKO_AUTH_API_KEY_FIELD,
           appId: maskPresence(app.env.IIKO_APP_ID),
           clientSecret: maskPresence(app.env.IIKO_CLIENT_SECRET),
           authPath: app.env.IIKO_AUTH_PATH,

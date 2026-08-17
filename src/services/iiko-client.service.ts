@@ -1,4 +1,9 @@
-import { iikoAuthFailed, iikoNotConfigured, iikoRequestFailed } from '../lib/errors.js';
+import {
+  iikoAuthFailed,
+  iikoMenuRequestFailed,
+  iikoNotConfigured,
+  iikoRequestFailed,
+} from '../lib/errors.js';
 import { redactDeep, sanitizeMessage } from '../lib/redaction.js';
 
 /**
@@ -6,7 +11,7 @@ import { redactDeep, sanitizeMessage } from '../lib/redaction.js';
  *
  * Используются только read-only endpoints:
  *   POST {IIKO_AUTH_BASE_URL}/access_token  — авторизация (api/v2)
- *   POST {IIKO_MENU_BASE_URL}/menu          — внешнее меню (api/2)
+ *   POST {IIKO_MENU_BASE_URL}/menu/by_id    — полное внешнее меню (api/2)
  *   POST {apiRoot}/api/1/organizations      — список организаций (legacy v1)
  *
  * Важно: auth и menu живут на РАЗНЫХ базах.
@@ -24,6 +29,7 @@ export interface IikoClientOptions {
   /** База запроса меню, например https://api-ru.iiko.services/api/2. */
   menuBaseUrl: string;
   apiKey?: string;
+  authApiKeyField?: 'apiLogin';
   appId?: string;
   clientSecret?: string;
   /** Путь авторизации относительно authBaseUrl, по умолчанию /access_token. */
@@ -32,9 +38,9 @@ export interface IikoClientOptions {
   menuPath?: string;
   authReturnAdditionalInfo?: boolean;
   authIncludeDisabled?: boolean;
-  /** Внешнее меню iiko (externalMenuId) для запроса /api/2/menu. */
+  /** Внешнее меню iiko (externalMenuId) для запроса /api/2/menu/by_id. */
   externalMenuId?: string;
-  /** Организация по умолчанию (organizationId) для запроса /api/2/menu. */
+  /** Организация по умолчанию (organizationId) для запроса /api/2/menu/by_id. */
   organizationId?: string;
   timeoutMs: number;
   syncEnabled: boolean;
@@ -115,6 +121,24 @@ export interface IikoAuthDiagnostics {
   durationMs: number;
 }
 
+export interface IikoMenuRequestDiagnostics {
+  finalUrl: string;
+  method: 'POST';
+  authorizationScheme: 'Bearer';
+  accessTokenPresent: boolean;
+  accessTokenLength: number;
+  externalMenuIdPresent: boolean;
+  externalMenuIdType: 'string';
+  organizationIdsType: 'array';
+  organizationIdsCount: number;
+  firstOrganizationIdLooksLikeUuid: boolean;
+  headersPresent: ['authorization', 'content-type', 'accept'];
+  lastUpstreamStatus: number | null;
+  lastCorrelationId: string | null;
+  safeUpstreamError: string | null;
+  durationMs: number;
+}
+
 interface TokenState {
   token: string;
   expiresAtMs: number;
@@ -139,13 +163,14 @@ export class IikoClient {
   private readonly menuUrl: string;
   private tokenState: TokenState | null = null;
   private inflightToken: Promise<string> | null = null;
+  private lastMenuDiagnostics: IikoMenuRequestDiagnostics | null = null;
 
   constructor(options: IikoClientOptions) {
     this.options = options;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.now = options.now ?? (() => Date.now());
     // authBaseUrl = https://api-ru.iiko.services/api/v2  -> authUrl  = .../api/v2/access_token
-    // menuBaseUrl = https://api-ru.iiko.services/api/2   -> menuUrl  = .../api/2/menu
+    // menuBaseUrl = https://api-ru.iiko.services/api/2   -> menuUrl  = .../api/2/menu/by_id
     // apiRoot     = https://api-ru.iiko.services          (для legacy /api/1/organizations)
     const authBase = normalizeBase(options.authBaseUrl);
     const menuBase = normalizeBase(options.menuBaseUrl);
@@ -172,8 +197,9 @@ export class IikoClient {
 
   /** Тело запроса авторизации; никогда не покидает клиент. */
   private buildAuthBody(): Record<string, unknown> {
+    const apiKeyField = this.options.authApiKeyField ?? 'apiLogin';
     return {
-      apiLogin: this.options.apiKey,
+      [apiKeyField]: this.options.apiKey,
       appId: this.options.appId,
       clientSecret: this.options.clientSecret,
       returnAdditionalInfo: this.options.authReturnAdditionalInfo ?? false,
@@ -203,9 +229,9 @@ export class IikoClient {
         this.buildAuthBody(),
         { operation: 'access_token', withAuth: false, absoluteUrl: true },
       );
-      const token = response.body.token;
+      const token = optionalString(response.body.token);
       if (!token) {
-        throw iikoAuthFailed({ reason: 'token_missing_in_response' });
+        throw iikoAuthFailed({ reason: 'token_missing_or_empty_in_response' });
       }
       this.tokenState = { token, expiresAtMs: this.now() + DEFAULT_TOKEN_TTL_MS };
       return token;
@@ -232,27 +258,229 @@ export class IikoClient {
 
   /**
    * Полное внешнее меню iiko: POST {menuUrl} (= /api/2/menu/by_id).
-   * Тело: { externalMenuId, organizationIds: [organizationId] }.
-   * Токен получается автоматически и кэшируется только в памяти.
-   * Возвращает сырой распарсенный JSON меню; логирование тела отключено.
-   * НЕ использовать /api/v2/menu или /api/1/nomenclature для полной синхронизации.
+   * Для каждого sync получает свежий auth token и создаёт запрос явно,
+   * семантически идентичный подтверждённому Postman-запросу.
+   * Сырое тело меню никогда не логируется и не сохраняется.
    */
   async getExternalMenu(
     organizationId: string,
     externalMenuId?: string,
   ): Promise<unknown> {
-    const menuId = externalMenuId ?? this.options.externalMenuId;
-    if (!menuId) {
-      throw iikoNotConfigured();
+    this.ensureConfigured();
+    const accessToken = await this.getAccessToken(true);
+    const configuredOrganizationId = String(this.options.organizationId ?? organizationId);
+    const configuredExternalMenuId = String(this.options.externalMenuId ?? externalMenuId ?? '');
+    return this.executeMenuRequest(
+      accessToken,
+      configuredOrganizationId,
+      configuredExternalMenuId,
+    ).then((result) => result.body);
+  }
+
+  /** Выполняет безопасную реальную пробу menu/by_id и возвращает только fingerprints. */
+  async diagnoseMenuRequest(): Promise<IikoMenuRequestDiagnostics> {
+    const startedAt = this.now();
+    this.lastMenuDiagnostics = null;
+    try {
+      this.ensureConfigured();
+      const accessToken = await this.getAccessToken(true);
+      await this.executeMenuRequest(
+        accessToken,
+        String(this.options.organizationId ?? ''),
+        this.options.externalMenuId,
+      );
+    } catch (error) {
+      // executeMenuRequest уже сохранил безопасную диагностику; auth failure фиксируем без секретов.
+      if (!this.lastMenuDiagnostics) {
+        this.lastMenuDiagnostics = this.buildMenuDiagnostics(
+          '',
+          String(this.options.externalMenuId ?? ''),
+          null,
+          null,
+          this.sanitizeMenuError(errorMessageOf(error), ''),
+          startedAt,
+        );
+      }
     }
-    const { body } = await this.authorizedRequest<unknown>(
-      this.menuUrl,
-      { externalMenuId: menuId, organizationIds: [organizationId] },
-      'menu_by_id',
-      organizationId,
-      true,
+    return (
+      this.lastMenuDiagnostics ??
+      this.buildMenuDiagnostics('', '', null, null, 'Запрос меню не выполнялся.', startedAt)
     );
-    return body;
+  }
+
+  private async executeMenuRequest(
+    rawAccessToken: string,
+    organizationId: string,
+    externalMenuId?: string,
+  ): Promise<{ body: unknown; httpStatus: number }> {
+    const startedAt = this.now();
+    const accessToken = normalizeBearerToken(rawAccessToken);
+    const menuRequestBody = {
+      externalMenuId: String(externalMenuId ?? this.options.externalMenuId ?? ''),
+      organizationIds: [String(organizationId)],
+    };
+
+    const validationError = validateMenuRequest(accessToken, menuRequestBody);
+    if (validationError) {
+      this.lastMenuDiagnostics = this.buildMenuDiagnostics(
+        accessToken,
+        menuRequestBody.externalMenuId,
+        null,
+        null,
+        validationError,
+        startedAt,
+        menuRequestBody.organizationIds,
+      );
+      throw iikoMenuRequestFailed({ safeUpstreamError: validationError });
+    }
+
+    const headers = {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
+
+    try {
+      const response = await this.fetchImpl(this.menuUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(menuRequestBody),
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      const parsed = safeJsonParse(text);
+      const correlationId = optionalString(asRecord(parsed)?.correlationId) ?? null;
+      const safeUpstreamError = response.ok
+        ? null
+        : this.sanitizeMenuError(
+            extractIikoErrorDescription(parsed) ?? `HTTP ${response.status}`,
+            accessToken,
+          );
+
+      this.lastMenuDiagnostics = this.buildMenuDiagnostics(
+        accessToken,
+        menuRequestBody.externalMenuId,
+        response.status,
+        correlationId,
+        safeUpstreamError,
+        startedAt,
+        menuRequestBody.organizationIds,
+      );
+
+      await this.record({
+        operation: 'menu_by_id',
+        status: response.ok ? 'SUCCESS' : 'FAILED',
+        httpStatus: response.status,
+        durationMs: this.now() - startedAt,
+        requestReference: this.menuUrl,
+        organizationId,
+        responseMetadata: response.ok
+          ? { correlationId, size: text.length }
+          : { correlationId },
+        errorCode: response.ok ? undefined : `HTTP_${response.status}`,
+        errorMessage: safeUpstreamError ?? undefined,
+      });
+
+      if (!response.ok) {
+        this.options.logger.warn(
+          {
+            operation: 'menu_by_id',
+            httpStatus: response.status,
+            correlationId,
+            durationMs: this.now() - startedAt,
+            safeUpstreamError,
+          },
+          'iiko menu request failed',
+        );
+        throw iikoMenuRequestFailed({
+          upstreamStatus: response.status,
+          correlationId,
+          safeUpstreamError: safeUpstreamError ?? `HTTP ${response.status}`,
+        });
+      }
+
+      this.options.logger.info(
+        {
+          operation: 'menu_by_id',
+          httpStatus: response.status,
+          correlationId,
+          durationMs: this.now() - startedAt,
+        },
+        'iiko menu request ok',
+      );
+      return { body: parsed ?? {}, httpStatus: response.status };
+    } catch (error) {
+      if (isAppErrorLike(error)) throw error;
+      const safeUpstreamError = this.sanitizeMenuError(
+        isAbortError(error) ? 'TIMEOUT' : errorMessageOf(error),
+        accessToken,
+      );
+      this.lastMenuDiagnostics = this.buildMenuDiagnostics(
+        accessToken,
+        menuRequestBody.externalMenuId,
+        null,
+        null,
+        safeUpstreamError,
+        startedAt,
+        menuRequestBody.organizationIds,
+      );
+      await this.record({
+        operation: 'menu_by_id',
+        status: 'FAILED',
+        durationMs: this.now() - startedAt,
+        requestReference: this.menuUrl,
+        organizationId,
+        errorCode: isAbortError(error) ? 'TIMEOUT' : 'NETWORK_ERROR',
+        errorMessage: safeUpstreamError,
+      });
+      throw iikoMenuRequestFailed({ safeUpstreamError });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private sanitizeMenuError(message: string, accessToken: string): string {
+    let safe = sanitizeMessage(message);
+    const sensitiveValues = [
+      accessToken,
+      this.options.apiKey,
+      this.options.appId,
+      this.options.clientSecret,
+    ];
+    for (const value of sensitiveValues) {
+      if (value && value.length >= 6) safe = safe.replaceAll(value, '[REDACTED]');
+    }
+    return safe.slice(0, 500);
+  }
+
+  private buildMenuDiagnostics(
+    accessToken: string,
+    externalMenuId: string,
+    lastUpstreamStatus: number | null,
+    lastCorrelationId: string | null,
+    safeUpstreamError: string | null,
+    startedAt: number,
+    organizationIds: string[] = [String(this.options.organizationId ?? '')],
+  ): IikoMenuRequestDiagnostics {
+    return {
+      finalUrl: this.menuUrl,
+      method: 'POST',
+      authorizationScheme: 'Bearer',
+      accessTokenPresent: accessToken.length > 0,
+      accessTokenLength: accessToken.length,
+      externalMenuIdPresent: externalMenuId.length > 0,
+      externalMenuIdType: 'string',
+      organizationIdsType: 'array',
+      organizationIdsCount: organizationIds.length,
+      firstOrganizationIdLooksLikeUuid: isUuid(organizationIds[0] ?? ''),
+      headersPresent: ['authorization', 'content-type', 'accept'],
+      lastUpstreamStatus,
+      lastCorrelationId,
+      safeUpstreamError,
+      durationMs: this.now() - startedAt,
+    };
   }
 
   async testConnection(): Promise<IikoTestConnectionResult> {
@@ -275,7 +503,7 @@ export class IikoClient {
    *
    * Стадия auth: реальный POST к /api/v2/access_token.
    * Стадия menu: если auth успешен и externalMenuId+organizationId настроены,
-   *   реальный POST к /api/v2/menu с Bearer-токеном из стадии auth.
+   *   реальный POST к /api/2/menu/by_id с Bearer-токеном из стадии auth.
    *
    * Никогда не выбрасывает ошибку и не возвращает токен, apiLogin,
    * clientSecret или тело запроса. Ошибки меню отмечаются отдельно и никогда
@@ -393,58 +621,37 @@ export class IikoClient {
     return stage;
   }
 
-  /** Стадия menu: POST /api/v2/menu с Bearer-токеном. */
+  /** Стадия menu: POST /api/2/menu/by_id с одним Bearer prefix. */
   private async runMenuDiagnosisStage(token: string): Promise<IikoStageDiagnostics> {
-    const stage: IikoStageDiagnostics = {
-      finalUrl: this.menuUrl,
-      method: 'POST',
-      httpStatus: null,
-      correlationId: null,
-      error: null,
-      durationMs: 0,
-      success: false,
-    };
-
     const startedAt = this.now();
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
     try {
-      const response = await this.fetchImpl(this.menuUrl, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json',
-          authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          externalMenuId: this.options.externalMenuId,
-          organizationIds: [this.options.organizationId],
-        }),
-        signal: controller.signal,
-      });
-      stage.httpStatus = response.status;
-      const text = await response.text();
-      const parsed = safeJsonParse(text);
-      const record = asRecord(parsed);
-      const correlationId = optionalString(record?.correlationId);
-      stage.correlationId = correlationId ?? null;
-      if (!response.ok) {
-        // Ошибка меню — отдельная стадия, не подменяет IIKO_AUTH_FAILED.
-        stage.error = sanitizeMessage(
-          extractIikoErrorDescription(parsed) ?? `HTTP ${response.status}`,
-        );
-      } else {
-        stage.success = true;
-      }
-    } catch (error) {
-      stage.error = sanitizeMessage(
-        isAbortError(error) ? 'TIMEOUT' : errorMessageOf(error),
+      const result = await this.executeMenuRequest(
+        token,
+        String(this.options.organizationId ?? ''),
+        this.options.externalMenuId,
       );
-    } finally {
-      clearTimeout(timer);
+      const diagnostics = this.lastMenuDiagnostics;
+      return {
+        finalUrl: this.menuUrl,
+        method: 'POST',
+        httpStatus: result.httpStatus,
+        correlationId: diagnostics?.lastCorrelationId ?? null,
+        error: null,
+        durationMs: this.now() - startedAt,
+        success: true,
+      };
+    } catch {
+      const diagnostics = this.lastMenuDiagnostics;
+      return {
+        finalUrl: this.menuUrl,
+        method: 'POST',
+        httpStatus: diagnostics?.lastUpstreamStatus ?? null,
+        correlationId: diagnostics?.lastCorrelationId ?? null,
+        error: diagnostics?.safeUpstreamError ?? 'Ошибка запроса меню.',
+        durationMs: this.now() - startedAt,
+        success: false,
+      };
     }
-    stage.durationMs = this.now() - startedAt;
-    return stage;
   }
 
   /**
@@ -706,7 +913,35 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function optionalString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function normalizeBearerToken(value: string): string {
+  return value.trim().replace(/^Bearer\s+/i, '').trim();
+}
+
+function validateMenuRequest(
+  accessToken: string,
+  body: { externalMenuId: string; organizationIds: string[] },
+): string | null {
+  if (accessToken.length === 0) return 'Токен авторизации iiko отсутствует.';
+  if (typeof body.externalMenuId !== 'string' || body.externalMenuId.trim().length === 0) {
+    return 'IIKO_EXTERNAL_MENU_ID должен быть непустой строкой.';
+  }
+  if (!Array.isArray(body.organizationIds)) return 'organizationIds должен быть массивом.';
+  if (body.organizationIds.length !== 1) {
+    return 'organizationIds должен содержать ровно одну организацию.';
+  }
+  if (!isUuid(body.organizationIds[0] ?? '')) {
+    return 'IIKO_ORGANIZATION_ID должен быть UUID.';
+  }
+  return null;
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
 }
 
 function normalizeOrganization(value: unknown): IikoOrganization | undefined {

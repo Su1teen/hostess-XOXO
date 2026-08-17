@@ -13,16 +13,18 @@ v0.1 использует iiko Cloud **только для чтения**. Ни�
 ## 2. Переменные окружения
 
 ```env
-IIKO_API_BASE_URL=https://api-ru.iiko.services/api/v2
+IIKO_AUTH_BASE_URL=https://api-ru.iiko.services/api/v2
+IIKO_MENU_BASE_URL=https://api-ru.iiko.services/api/2
 IIKO_API_KEY=<apiLogin>
+IIKO_AUTH_API_KEY_FIELD=apiLogin
 IIKO_APP_ID=<appId>
 IIKO_CLIENT_SECRET=<clientSecret>
 IIKO_AUTH_PATH=/access_token
-IIKO_MENU_PATH=/menu
+IIKO_MENU_BY_ID_PATH=/menu/by_id
 IIKO_AUTH_RETURN_ADDITIONAL_INFO=false
 IIKO_AUTH_INCLUDE_DISABLED=false
-IIKO_ORGANIZATION_ID=<uuid, опционально>
-IIKO_EXTERNAL_MENU_ID=<externalMenuId, опционально>
+IIKO_ORGANIZATION_ID=<uuid>
+IIKO_EXTERNAL_MENU_ID=<externalMenuId>
 IIKO_TERMINAL_GROUP_ID=<uuid, опционально>
 IIKO_REQUEST_TIMEOUT_MS=15000
 IIKO_SYNC_ENABLED=true
@@ -31,23 +33,20 @@ IIKO_DEBUG_RAW_PAYLOADS=false
 
 - `IIKO_SYNC_ENABLED=false` полностью отключает обращения к iiko (все iiko-эндпоинты вернут
   `IIKO_NOT_CONFIGURED`) — удобный безопасный режим для демо и разработки.
-- `IIKO_DEBUG_RAW_PAYLOADS=true` включает логирование payload-ов **с редакцией**; включайте
-  только на время диагностики.
-- `IIKO_API_BASE_URL` указывает на корень v2 (`/api/v2`). Пути `IIKO_AUTH_PATH` и
-  `IIKO_MENU_PATH` задаются относительно базы, поэтому итоговые URL:
+- Сырое полное меню не логируется даже при включённой дополнительной диагностике.
+- Auth и menu имеют отдельные базы и пути. Итоговые URL:
   auth = `https://api-ru.iiko.services/api/v2/access_token`,
-  menu = `https://api-ru.iiko.services/api/v2/menu`.
-- Авторизация использует `apiLogin` (не `apiKey`). Токен живёт только в памяти процесса.
+  menu = `https://api-ru.iiko.services/api/2/menu/by_id`.
+- Авторизация использует поле `apiLogin`; `IIKO_AUTH_API_KEY_FIELD` принимает только это значение.
+  Токен живёт только в памяти процесса.
 
 ## 3. Используемые эндпоинты (все read-only)
 
-| Операция     | Эндпоинт                                |
-| ------------ | --------------------------------------- |
-| Токен (v2)   | `POST /api/v2/access_token`             |
-| Меню (v2)    | `POST /api/v2/menu`                     |
-| Организации  | `POST /api/1/organizations`             |
-| Номенклатура | `POST /api/1/nomenclature`              |
-| Стоп-листы   | `POST /api/1/stop_lists`                |
+| Операция      | Эндпоинт                    |
+| ------------- | --------------------------- |
+| Токен         | `POST /api/v2/access_token` |
+| Полное меню   | `POST /api/2/menu/by_id`    |
+| Организации   | `POST /api/1/organizations` |
 
 Записывающие эндпоинты (заказы, прайс-листы, оплаты) не вызываются — это проверяется тестом
 в `tests/iiko-client.test.ts`.
@@ -66,7 +65,7 @@ curl -X POST -H "x-admin-api-key: $ADMIN_API_KEY" -H 'content-type: application/
   -d '{"iikoOrganizationId":"<organization uuid>"}' \
   http://localhost:3000/api/v1/admin/iiko/select-organization
 
-# 3. Синхронизация номенклатуры
+# 3. Синхронизация полного внешнего меню
 curl -X POST -H "x-admin-api-key: $ADMIN_API_KEY" \
   http://localhost:3000/api/v1/admin/iiko/sync-menu
 
@@ -95,12 +94,13 @@ Backend проверяет заголовок `x-iiko-signature`, дедупли
 | ------------------------- | ---------------------------------------------------- |
 | `IIKO_NOT_CONFIGURED`     | `IIKO_SYNC_ENABLED=true`, `IIKO_API_KEY`, `IIKO_APP_ID`, `IIKO_CLIENT_SECRET` |
 | `IIKO_AUTH_FAILED`        | Корректность apiLogin/appId/clientSecret             |
-| `IIKO_REQUEST_FAILED` 4xx | Идентификатор организации, externalMenuId, права ключа |
-| Таймауты                  | `IIKO_REQUEST_TIMEOUT_MS`, сетевой доступ из Railway |
-| Пустая номенклатура       | Организация выбрана? Меню опубликовано в iiko?       |
+| `IIKO_MENU_REQUEST_FAILED` | Проверьте safe details и menu-request-diagnostics    |
+| Таймауты                   | `IIKO_REQUEST_TIMEOUT_MS`, сетевой доступ из Railway |
+| Пустое меню                | Организация выбрана? Меню опубликовано в iiko?       |
 
-Двухстадийная диагностика auth + menu: `GET /api/v1/admin/iiko/auth-diagnostics`
-и кнопка «Диагностика авторизации» в `/admin`. Возвращает upstream HTTP-статус и
-`correlationId` для каждой стадии, но никогда не раскрывает секреты или токен.
+Двухстадийная диагностика auth + menu: `GET /api/v1/admin/iiko/auth-diagnostics`.
+Безопасные fingerprints фактического menu request: `GET /api/v1/admin/iiko/menu-request-diagnostics`.
+Оба endpoint возвращают upstream HTTP-статус и `correlationId`, но никогда не раскрывают
+секреты, токен, полный Authorization header или сырое меню.
 
 Все попытки обращения к iiko видны в таблице `iiko_sync_attempts` и в `/api/v1/admin/diagnostics`.

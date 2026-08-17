@@ -200,6 +200,7 @@ describe('IikoClient endpoints', () => {
     const { client, fetchMock } = createClient([
       jsonResponse({ token: 't' }),
       jsonResponse({ organizations: [] }),
+      jsonResponse({ token: 'fresh-t' }),
       jsonResponse({ itemCategories: [] }),
     ]);
 
@@ -210,6 +211,7 @@ describe('IikoClient endpoints', () => {
     expect(urls).toEqual([
       'https://api-ru.iiko.services/api/v2/access_token',
       'https://api-ru.iiko.services/api/1/organizations',
+      'https://api-ru.iiko.services/api/v2/access_token',
       'https://api-ru.iiko.services/api/2/menu/by_id',
     ]);
     expect(urls.some((url) => /order|price|command/i.test(url))).toBe(false);
@@ -277,30 +279,43 @@ describe('IikoClient endpoints', () => {
     expect(all.client.isConfigured).toBe(true);
   });
 
-  it('getExternalMenu шлёт externalMenuId + organizationIds на /api/2/menu/by_id с Bearer', async () => {
+  it('getExternalMenu создаёт запрос, семантически идентичный Postman, без duplicate Bearer', async () => {
     const { client, fetchMock } = createClient([
-      jsonResponse({ token: 't' }),
-      jsonResponse({ itemCategories: [] }),
+      // Даже если upstream token ошибочно уже содержит scheme, финальный header содержит ровно один Bearer.
+      jsonResponse({ token: 'Bearer t' }),
+      jsonResponse({ itemCategories: [], correlationId: 'menu-correlation' }),
     ]);
     await client.getExternalMenu(ORG_ID);
 
-    const menuUrl = String(fetchMock.mock.calls[1]?.[0]);
-    expect(menuUrl).toBe('https://api-ru.iiko.services/api/2/menu/by_id');
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
+      'https://api-ru.iiko.services/api/2/menu/by_id',
+    );
     const init = fetchMock.mock.calls[1]?.[1] as RequestInit;
-    const body = JSON.parse(String(init.body));
-    expect(body.externalMenuId).toBe('88042');
-    expect(body.organizationIds).toEqual([ORG_ID]);
-    const headers = init.headers as Record<string, string>;
-    expect(headers.authorization).toBe('Bearer t');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({
+      externalMenuId: '88042',
+      organizationIds: [ORG_ID],
+    });
+    expect(init.headers).toEqual({
+      Authorization: 'Bearer t',
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    });
+    expect(String((init.headers as Record<string, string>).Authorization).match(/Bearer/g)).toHaveLength(
+      1,
+    );
   });
 
-  it('getExternalMenu требует externalMenuId', async () => {
-    const { client } = createClient([jsonResponse({ token: 't' })], {
+  it('getExternalMenu валидирует непустой externalMenuId до menu fetch', async () => {
+    const { client, fetchMock } = createClient([jsonResponse({ token: 't' })], {
       externalMenuId: undefined,
     });
     await expect(client.getExternalMenu(ORG_ID)).rejects.toMatchObject({
-      code: 'IIKO_NOT_CONFIGURED',
+      code: 'IIKO_MENU_REQUEST_FAILED',
+      details: { safeUpstreamError: 'IIKO_EXTERNAL_MENU_ID должен быть непустой строкой.' },
     });
+    // Выполнен только свежий auth; menu fetch не отправлен.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('diagnoseAuth: две стадии auth+menu, без токена и секретов', async () => {
@@ -338,7 +353,7 @@ describe('IikoClient endpoints', () => {
 
     const menuInit = fetchMock.mock.calls[2]?.[1] as RequestInit;
     const menuHeaders = menuInit.headers as Record<string, string>;
-    expect(menuHeaders.authorization).toBe('Bearer session-key');
+    expect(menuHeaders.Authorization).toBe('Bearer session-key');
   });
 
   it('diagnoseAuth: menu стадия не выполняется при провале auth', async () => {
@@ -414,6 +429,54 @@ describe('IikoClient endpoints', () => {
     expect(serialized).not.toContain('session-key');
     expect(serialized).not.toContain('test-api-login');
     expect(serialized).not.toContain('test-client-secret');
-    expect(serialized).not.toContain('Bearer');
+    expect(serialized).not.toContain('Bearer session-key');
+  });
+
+  it('menu-request diagnostics возвращает только безопасные fingerprints', async () => {
+    const { client } = createClient([
+      jsonResponse({ token: 'Bearer session-key', correlationId: 'auth-corr' }),
+      jsonResponse({ itemCategories: [], correlationId: 'menu-corr' }),
+    ]);
+    const diagnostics = await client.diagnoseMenuRequest();
+
+    expect(diagnostics).toMatchObject({
+      finalUrl: 'https://api-ru.iiko.services/api/2/menu/by_id',
+      method: 'POST',
+      authorizationScheme: 'Bearer',
+      accessTokenPresent: true,
+      accessTokenLength: 'session-key'.length,
+      externalMenuIdPresent: true,
+      externalMenuIdType: 'string',
+      organizationIdsType: 'array',
+      organizationIdsCount: 1,
+      firstOrganizationIdLooksLikeUuid: true,
+      headersPresent: ['authorization', 'content-type', 'accept'],
+      lastUpstreamStatus: 200,
+      lastCorrelationId: 'menu-corr',
+      safeUpstreamError: null,
+    });
+    const serialized = JSON.stringify(diagnostics);
+    expect(serialized).not.toContain('session-key');
+    expect(serialized).not.toContain('test-api-login');
+    expect(serialized).not.toContain('test-client-secret');
+  });
+
+  it('menu failure сохраняет upstream status, correlationId и безопасную ошибку', async () => {
+    const { client } = createClient([
+      jsonResponse({ token: 't' }),
+      jsonResponse(
+        { errorDescription: 'External menu rejected', correlationId: 'failure-corr' },
+        400,
+      ),
+    ]);
+
+    await expect(client.getExternalMenu(ORG_ID)).rejects.toMatchObject({
+      code: 'IIKO_MENU_REQUEST_FAILED',
+      details: {
+        upstreamStatus: 400,
+        correlationId: 'failure-corr',
+        safeUpstreamError: 'External menu rejected',
+      },
+    });
   });
 });

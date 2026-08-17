@@ -8,6 +8,7 @@ export const ERROR_CODES = [
   'IIKO_NOT_CONFIGURED',
   'IIKO_AUTH_FAILED',
   'IIKO_REQUEST_FAILED',
+  'IIKO_MENU_REQUEST_FAILED',
   'IIKO_ORGANIZATION_NOT_SELECTED',
   'NO_EXCHANGE_PRODUCTS_SELECTED',
   'INVALID_ROUND_TRANSITION',
@@ -26,6 +27,7 @@ export interface ErrorBody {
     code: ErrorCode;
     message: string;
     requestId: string;
+    details?: Record<string, unknown>;
   };
 }
 
@@ -34,22 +36,32 @@ export class AppError extends Error {
   readonly code: ErrorCode;
   readonly statusCode: number;
   readonly details?: Record<string, unknown>;
+  readonly exposeDetails: boolean;
 
   constructor(
     code: ErrorCode,
     message: string,
     statusCode: number,
     details?: Record<string, unknown>,
+    exposeDetails = false,
   ) {
     super(message);
     this.name = 'AppError';
     this.code = code;
     this.statusCode = statusCode;
     this.details = details;
+    this.exposeDetails = exposeDetails;
   }
 
   toBody(requestId: string): ErrorBody {
-    return { error: { code: this.code, message: this.message, requestId } };
+    return {
+      error: {
+        code: this.code,
+        message: this.message,
+        requestId,
+        ...(this.exposeDetails && this.details ? { details: this.details } : {}),
+      },
+    };
   }
 }
 
@@ -79,6 +91,23 @@ export const iikoAuthFailed = (details?: Record<string, unknown>) =>
 
 export const iikoRequestFailed = (details?: Record<string, unknown>) =>
   new AppError('IIKO_REQUEST_FAILED', 'Запрос к iiko Cloud API завершился ошибкой', 502, details);
+
+export const iikoMenuRequestFailed = (details: {
+  upstreamStatus?: number | null;
+  correlationId?: string | null;
+  safeUpstreamError: string;
+}) =>
+  new AppError(
+    'IIKO_MENU_REQUEST_FAILED',
+    details.safeUpstreamError,
+    502,
+    {
+      upstreamStatus: details.upstreamStatus ?? null,
+      correlationId: details.correlationId ?? null,
+      safeUpstreamError: details.safeUpstreamError,
+    },
+    true,
+  );
 
 export const organizationNotSelected = () =>
   new AppError(

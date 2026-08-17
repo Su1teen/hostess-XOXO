@@ -44,19 +44,18 @@ export const envSchema = z
 
     CORS_ORIGINS: csvList,
 
-    // Auth и menu используют РАЗНЫЕ базы iiko Cloud API:
-    //   auth:  POST {IIKO_AUTH_BASE_URL}{IIKO_AUTH_PATH}  -> /api/v2/access_token
-    //   menu:  POST {IIKO_MENU_BASE_URL}{IIKO_MENU_PATH}  -> /api/2/menu
-    // Не использовать общий IIKO_API_BASE_URL для обеих операций.
+    // Auth и полное menu используют РАЗНЫЕ базы iiko Cloud API:
+    //   auth: POST {IIKO_AUTH_BASE_URL}{IIKO_AUTH_PATH}
+    //   menu: POST {IIKO_MENU_BASE_URL}{IIKO_MENU_BY_ID_PATH}
     IIKO_AUTH_BASE_URL: z.string().url().default('https://api-ru.iiko.services/api/v2'),
     IIKO_MENU_BASE_URL: z.string().url().default('https://api-ru.iiko.services/api/2'),
     IIKO_API_KEY: optionalString,
+    IIKO_AUTH_API_KEY_FIELD: z.literal('apiLogin').default('apiLogin'),
     IIKO_APP_ID: optionalString,
     IIKO_CLIENT_SECRET: optionalString,
     IIKO_AUTH_PATH: z.string().default('/access_token'),
     // Полное внешнее меню iiko: POST {IIKO_MENU_BASE_URL}{IIKO_MENU_BY_ID_PATH}
     // -> https://api-ru.iiko.services/api/2/menu/by_id
-    // НЕ использовать /api/v2/menu или /api/1/nomenclature для полной синхронизации.
     IIKO_MENU_BY_ID_PATH: z.string().default('/menu/by_id'),
     IIKO_AUTH_RETURN_ADDITIONAL_INFO: booleanFromString,
     IIKO_AUTH_INCLUDE_DISABLED: booleanFromString,
@@ -105,6 +104,20 @@ export const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ['IIKO_CLIENT_SECRET'],
         message: 'IIKO_CLIENT_SECRET обязателен при IIKO_SYNC_ENABLED=true',
+      });
+    }
+    if (value.IIKO_SYNC_ENABLED && !value.IIKO_EXTERNAL_MENU_ID) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['IIKO_EXTERNAL_MENU_ID'],
+        message: 'IIKO_EXTERNAL_MENU_ID обязателен при IIKO_SYNC_ENABLED=true',
+      });
+    }
+    if (value.IIKO_SYNC_ENABLED && !value.IIKO_ORGANIZATION_ID) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['IIKO_ORGANIZATION_ID'],
+        message: 'IIKO_ORGANIZATION_ID обязателен при IIKO_SYNC_ENABLED=true',
       });
     }
     if (value.TELEGRAM_ENABLED && (!value.TELEGRAM_BOT_TOKEN || !value.TELEGRAM_ALERT_CHAT_ID)) {
