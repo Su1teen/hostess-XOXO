@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppError } from '../src/lib/errors.js';
-import { IikoClient, type IikoAttemptRecord } from '../src/services/iiko-client.service.js';
+import {
+  IikoClient,
+  type IikoAttemptRecord,
+  type IikoHttpsRequestFn,
+  type IikoHttpsRequestResult,
+} from '../src/services/iiko-client.service.js';
 
 const logger = {
   info: () => {},
@@ -18,6 +23,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 interface ClientSetup {
   fetchMock: ReturnType<typeof vi.fn>;
+  httpsRequestMock: ReturnType<typeof vi.fn>;
   attempts: IikoAttemptRecord[];
   client: IikoClient;
 }
@@ -35,6 +41,8 @@ function createClient(
     menuBaseUrl?: string;
     externalMenuId?: string;
     organizationId?: string;
+    menuTransport?: 'fetch' | 'https_request';
+    httpsResponses?: Array<IikoHttpsRequestResult | Error>;
   } = {},
 ): ClientSetup {
   const queue = [...responses];
@@ -44,6 +52,13 @@ function createClient(
     if (next instanceof Error) throw next;
     return next;
   });
+  const httpsQueue = [...(overrides.httpsResponses ?? [])];
+  const httpsRequestMock = vi.fn(async () => {
+    const next = httpsQueue.shift();
+    if (!next) throw new Error('неожиданный дополнительный https.request вызов');
+    if (next instanceof Error) throw next;
+    return next;
+  }) as unknown as IikoHttpsRequestFn;
   const attempts: IikoAttemptRecord[] = [];
 
   const client = new IikoClient({
@@ -65,6 +80,8 @@ function createClient(
     debugRawPayloads: false,
     logger,
     fetchImpl: fetchMock as unknown as typeof fetch,
+    httpsRequestImpl: httpsRequestMock,
+    menuTransport: overrides.menuTransport,
     onAttempt: (attempt) => {
       attempts.push(attempt);
     },
@@ -72,7 +89,7 @@ function createClient(
     retryDelayMs: 0,
   });
 
-  return { fetchMock, attempts, client };
+  return { fetchMock, httpsRequestMock, attempts, client };
 }
 
 const ORG_ID = 'cc9baa8d-cfac-4092-9c97-477746fe84e2';
@@ -300,7 +317,10 @@ describe('IikoClient endpoints', () => {
     expect(init.headers).toEqual({
       Authorization: 'Bearer t',
       'Content-Type': 'application/json',
-      Accept: 'application/json',
+      Accept: '*/*',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'User-Agent': 'PostmanRuntime/7.43.0',
+      Connection: 'keep-alive',
     });
     expect(String((init.headers as Record<string, string>).Authorization).match(/Bearer/g)).toHaveLength(
       1,
@@ -538,5 +558,373 @@ describe('IikoClient endpoints', () => {
       code: 'IIKO_MENU_JSON_PARSE_FAILED',
       details: { kind: 'JSON_PARSE_ERROR', upstreamStatus: 200 },
     });
+  });
+});
+
+describe('IikoClient menu transport fallback (fetch -> https.request)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const HTML_500_BODY = '<!DOCTYPE html><html><body>500 Internal Server Error</body></html>';
+
+  function httpsResult(body: string, status = 200, contentType = 'application/json'): IikoHttpsRequestResult {
+    return {
+      status,
+      headers: { 'content-type': contentType },
+      body,
+    };
+  }
+
+  it('getExternalMenu использует Postman-эквивалентные заголовки (User-Agent, Accept-Language, Connection, Accept */*)', async () => {
+    const { client, fetchMock } = createClient([
+      jsonResponse({ token: 't' }),
+      jsonResponse({ itemCategories: [] }),
+    ]);
+    await client.getExternalMenu(ORG_ID);
+    const init = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    const headers = init.headers as Record<string, string>;
+    expect(headers['User-Agent']).toBe('PostmanRuntime/7.43.0');
+    expect(headers['Accept']).toBe('*/*');
+    expect(headers['Accept-Language']).toBe('en-US,en;q=0.9');
+    expect(headers['Connection']).toBe('keep-alive');
+    expect(headers['Content-Type']).toBe('application/json');
+    expect(headers['Authorization']).toBe('Bearer t');
+  });
+
+  it('getExternalMenu переключается на https.request при HTML 500 от fetch', async () => {
+    const { client, fetchMock, httpsRequestMock } = createClient([
+      jsonResponse({ token: 't' }),
+      new Response(HTML_500_BODY, {
+        status: 500,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      }),
+    ], {
+      httpsResponses: [
+        httpsResult(JSON.stringify({ itemCategories: [], correlationId: 'https-corr' }), 200),
+      ],
+    });
+
+    const menu = await client.getExternalMenu(ORG_ID);
+    expect(menu).toEqual({ itemCategories: [], correlationId: 'https-corr' });
+
+    // fetch был вызван для auth + menu (HTML 500).
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // https.request был вызван один раз как fallback для menu.
+    expect(httpsRequestMock).toHaveBeenCalledTimes(1);
+
+    const httpsArgs = httpsRequestMock.mock.calls[0];
+    expect(httpsArgs?.[0]).toBe('https://api-ru.iiko.services/api/2/menu/by_id');
+    const httpsHeaders = httpsArgs?.[1] as Record<string, string>;
+    expect(httpsHeaders['Authorization']).toBe('Bearer t');
+    expect(httpsHeaders['User-Agent']).toBe('PostmanRuntime/7.43.0');
+    expect(httpsHeaders['Accept']).toBe('*/*');
+    expect(httpsHeaders['Connection']).toBe('keep-alive');
+    const httpsBody = httpsArgs?.[2] as string;
+    expect(JSON.parse(httpsBody)).toEqual({
+      externalMenuId: '88042',
+      organizationIds: [ORG_ID],
+    });
+  });
+
+  it('getExternalMenu НЕ переключается на https.request при JSON 500 от fetch', async () => {
+    const { client, httpsRequestMock } = createClient([
+      jsonResponse({ token: 't' }),
+      jsonResponse({ errorDescription: 'server error' }, 500),
+    ]);
+    await expect(client.getExternalMenu(ORG_ID)).rejects.toMatchObject({
+      code: 'IIKO_MENU_REQUEST_FAILED',
+    });
+    expect(httpsRequestMock).not.toHaveBeenCalled();
+  });
+
+  it('getExternalMenu НЕ переключается на https.request при HTML 4xx от fetch', async () => {
+    const { client, httpsRequestMock } = createClient([
+      jsonResponse({ token: 't' }),
+      new Response('<!DOCTYPE html><html>404</html>', {
+        status: 404,
+        headers: { 'content-type': 'text/html' },
+      }),
+    ]);
+    await expect(client.getExternalMenu(ORG_ID)).rejects.toMatchObject({
+      code: 'IIKO_MENU_REQUEST_FAILED',
+    });
+    expect(httpsRequestMock).not.toHaveBeenCalled();
+  });
+
+  it('getExternalMenu с menuTransport=https_request использует https.request напрямую', async () => {
+    const { client, fetchMock, httpsRequestMock } = createClient(
+      [jsonResponse({ token: 't' })],
+      {
+        menuTransport: 'https_request',
+        httpsResponses: [
+          httpsResult(JSON.stringify({ itemCategories: [] }), 200),
+        ],
+      },
+    );
+    const menu = await client.getExternalMenu(ORG_ID);
+    expect(menu).toEqual({ itemCategories: [] });
+    // fetch только для auth.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(httpsRequestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('diagnoseMenuTransport: fetch HTML 500 -> https.request 200, recommended=https_request', async () => {
+    // fetch для menu вернёт HTML 500; https.request вернёт JSON 200.
+    const fetchMock2 = vi.fn(async (url: string) => {
+      if (url.includes('/access_token')) {
+        return jsonResponse({ token: 't' });
+      }
+      return new Response(HTML_500_BODY, {
+        status: 500,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      });
+    });
+    const httpsMock2 = vi.fn(async () =>
+      httpsResult(JSON.stringify({ itemCategories: [], correlationId: 'https-corr' }), 200),
+    ) as unknown as IikoHttpsRequestFn;
+
+    const client2 = new IikoClient({
+      authBaseUrl: 'https://api-ru.iiko.services/api/v2',
+      menuBaseUrl: 'https://api-ru.iiko.services/api/2',
+      apiKey: 'test-api-login',
+      appId: 'test-app-id',
+      clientSecret: 'test-client-secret',
+      externalMenuId: '88042',
+      organizationId: ORG_ID,
+      timeoutMs: 1000,
+      syncEnabled: true,
+      debugRawPayloads: false,
+      logger,
+      fetchImpl: fetchMock2 as unknown as typeof fetch,
+      httpsRequestImpl: httpsMock2,
+    });
+
+    const diag = await client2.diagnoseMenuTransport();
+
+    expect(diag.method).toBe('POST');
+    expect(diag.finalUrl).toBe('https://api-ru.iiko.services/api/2/menu/by_id');
+    expect(diag.userAgent).toBe('PostmanRuntime/7.43.0');
+    expect(diag.contentType).toBe('application/json');
+    expect(diag.outboundHeaderNames).toEqual([
+      'Authorization',
+      'Content-Type',
+      'Accept',
+      'Accept-Language',
+      'User-Agent',
+      'Connection',
+    ]);
+    expect(diag.tokenPresent).toBe(true);
+    expect(diag.tokenLength).toBe(1);
+
+    expect(diag.fetch.transport).toBe('fetch');
+    expect(diag.fetch.success).toBe(false);
+    expect(diag.fetch.httpStatus).toBe(500);
+    expect(diag.fetch.errorKind).toBeNull();
+
+    expect(diag.httpsRequest).not.toBeNull();
+    expect(diag.httpsRequest?.transport).toBe('https_request');
+    expect(diag.httpsRequest?.success).toBe(true);
+    expect(diag.httpsRequest?.httpStatus).toBe(200);
+    expect(diag.httpsRequest?.correlationId).toBe('https-corr');
+    expect(diag.httpsRequest?.responseTextSha256).not.toBeNull();
+    expect(diag.httpsRequest?.responseTextPreview).not.toContain('t"');
+
+    expect(diag.recommendedTransport).toBe('https_request');
+
+    const serialized = JSON.stringify(diag);
+    expect(serialized).not.toContain('test-api-login');
+    expect(serialized).not.toContain('test-app-id');
+    expect(serialized).not.toContain('test-client-secret');
+    // Токен не должен появляться в diagnostics.
+    expect(serialized).not.toContain('"Bearer t"');
+  });
+
+  it('diagnoseMenuTransport: fetch 200 -> https.request не выполняется, recommended=fetch', async () => {
+    const fetchMock2 = vi.fn(async (url: string) => {
+      if (url.includes('/access_token')) {
+        return jsonResponse({ token: 't' });
+      }
+      return jsonResponse({ itemCategories: [], correlationId: 'fetch-corr' });
+    });
+    const httpsMock2 = vi.fn(async () =>
+      httpsResult(JSON.stringify({ itemCategories: [] }), 200),
+    ) as unknown as IikoHttpsRequestFn;
+
+    const client = new IikoClient({
+      authBaseUrl: 'https://api-ru.iiko.services/api/v2',
+      menuBaseUrl: 'https://api-ru.iiko.services/api/2',
+      apiKey: 'test-api-login',
+      appId: 'test-app-id',
+      clientSecret: 'test-client-secret',
+      externalMenuId: '88042',
+      organizationId: ORG_ID,
+      timeoutMs: 1000,
+      syncEnabled: true,
+      debugRawPayloads: false,
+      logger,
+      fetchImpl: fetchMock2 as unknown as typeof fetch,
+      httpsRequestImpl: httpsMock2,
+    });
+
+    const diag = await client.diagnoseMenuTransport();
+
+    expect(diag.fetch.success).toBe(true);
+    expect(diag.fetch.httpStatus).toBe(200);
+    expect(diag.fetch.correlationId).toBe('fetch-corr');
+    expect(diag.httpsRequest).toBeNull();
+    expect(diag.recommendedTransport).toBe('fetch');
+  });
+
+  it('diagnoseMenuTransport: fetch network error -> https.request НЕ выполняется (только HTML 500 триггерит fallback)', async () => {
+    const fetchMock2 = vi.fn(async (url: string) => {
+      if (url.includes('/access_token')) {
+        return jsonResponse({ token: 't' });
+      }
+      throw new Error('fetch failed');
+    });
+    const httpsMock2 = vi.fn(async () =>
+      httpsResult(JSON.stringify({ itemCategories: [], correlationId: 'https-corr' }), 200),
+    ) as unknown as IikoHttpsRequestFn;
+
+    const client = new IikoClient({
+      authBaseUrl: 'https://api-ru.iiko.services/api/v2',
+      menuBaseUrl: 'https://api-ru.iiko.services/api/2',
+      apiKey: 'test-api-login',
+      appId: 'test-app-id',
+      clientSecret: 'test-client-secret',
+      externalMenuId: '88042',
+      organizationId: ORG_ID,
+      timeoutMs: 1000,
+      syncEnabled: true,
+      debugRawPayloads: false,
+      logger,
+      fetchImpl: fetchMock2 as unknown as typeof fetch,
+      httpsRequestImpl: httpsMock2,
+    });
+
+    const diag = await client.diagnoseMenuTransport();
+
+    expect(diag.fetch.success).toBe(false);
+    expect(diag.fetch.httpStatus).toBeNull();
+    expect(diag.fetch.errorKind).toBe('NETWORK_ERROR');
+    // Fallback НЕ выполняется при network error — только при HTML 500.
+    expect(diag.httpsRequest).toBeNull();
+    expect(diag.recommendedTransport).toBe('fetch');
+    expect(httpsMock2).not.toHaveBeenCalled();
+  });
+
+  it('diagnoseMenuTransport: responseTextPreview обрезается до 300 символов и редактирует секреты', async () => {
+    const longBody = JSON.stringify({
+      message: 'test-client-secret',
+      padding: 'x'.repeat(500),
+      correlationId: 'safe-corr',
+    });
+    const fetchMock2 = vi.fn(async (url: string) => {
+      if (url.includes('/access_token')) {
+        return jsonResponse({ token: 't' });
+      }
+      return new Response(longBody, {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const client = new IikoClient({
+      authBaseUrl: 'https://api-ru.iiko.services/api/v2',
+      menuBaseUrl: 'https://api-ru.iiko.services/api/2',
+      apiKey: 'test-api-login',
+      appId: 'test-app-id',
+      clientSecret: 'test-client-secret',
+      externalMenuId: '88042',
+      organizationId: ORG_ID,
+      timeoutMs: 1000,
+      syncEnabled: true,
+      debugRawPayloads: false,
+      logger,
+      fetchImpl: fetchMock2 as unknown as typeof fetch,
+    });
+
+    const diag = await client.diagnoseMenuTransport();
+    expect(diag.fetch.responseTextPreview?.length).toBeLessThanOrEqual(300);
+    expect(diag.fetch.responseTextPreview).not.toContain('test-client-secret');
+    expect(diag.fetch.responseTextSha256).not.toBeNull();
+    expect(diag.fetch.responseTextSha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('diagnoseMenuTransport: https.request timeout классифицируется как TIMEOUT', async () => {
+    const fetchMock2 = vi.fn(async (url: string) => {
+      if (url.includes('/access_token')) {
+        return jsonResponse({ token: 't' });
+      }
+      return new Response(HTML_500_BODY, {
+        status: 500,
+        headers: { 'content-type': 'text/html' },
+      });
+    });
+    const timeoutErr = new Error('https.request timed out');
+    timeoutErr.name = 'TimeoutError';
+    const httpsMock2 = vi.fn(async () => {
+      throw timeoutErr;
+    }) as unknown as IikoHttpsRequestFn;
+
+    const client = new IikoClient({
+      authBaseUrl: 'https://api-ru.iiko.services/api/v2',
+      menuBaseUrl: 'https://api-ru.iiko.services/api/2',
+      apiKey: 'test-api-login',
+      appId: 'test-app-id',
+      clientSecret: 'test-client-secret',
+      externalMenuId: '88042',
+      organizationId: ORG_ID,
+      timeoutMs: 1000,
+      syncEnabled: true,
+      debugRawPayloads: false,
+      logger,
+      fetchImpl: fetchMock2 as unknown as typeof fetch,
+      httpsRequestImpl: httpsMock2,
+    });
+
+    const diag = await client.diagnoseMenuTransport();
+    expect(diag.httpsRequest).not.toBeNull();
+    expect(diag.httpsRequest?.success).toBe(false);
+    expect(diag.httpsRequest?.errorKind).toBe('TIMEOUT');
+    expect(diag.recommendedTransport).toBe('fetch');
+  });
+
+  it('diagnoseMenuTransport никогда не содержит токен или секреты', async () => {
+    const fetchMock2 = vi.fn(async (url: string) => {
+      if (url.includes('/access_token')) {
+        return jsonResponse({ token: 'session-key-secret' });
+      }
+      return new Response(HTML_500_BODY, {
+        status: 500,
+        headers: { 'content-type': 'text/html' },
+      });
+    });
+    const httpsMock2 = vi.fn(async () =>
+      httpsResult(JSON.stringify({ itemCategories: [], correlationId: 'c1' }), 200),
+    ) as unknown as IikoHttpsRequestFn;
+
+    const client = new IikoClient({
+      authBaseUrl: 'https://api-ru.iiko.services/api/v2',
+      menuBaseUrl: 'https://api-ru.iiko.services/api/2',
+      apiKey: 'test-api-login',
+      appId: 'test-app-id',
+      clientSecret: 'test-client-secret',
+      externalMenuId: '88042',
+      organizationId: ORG_ID,
+      timeoutMs: 1000,
+      syncEnabled: true,
+      debugRawPayloads: false,
+      logger,
+      fetchImpl: fetchMock2 as unknown as typeof fetch,
+      httpsRequestImpl: httpsMock2,
+    });
+
+    const diag = await client.diagnoseMenuTransport();
+    const serialized = JSON.stringify(diag);
+    expect(serialized).not.toContain('session-key-secret');
+    expect(serialized).not.toContain('test-api-login');
+    expect(serialized).not.toContain('test-app-id');
+    expect(serialized).not.toContain('test-client-secret');
   });
 });

@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { request as httpsRequest, type RequestOptions } from 'node:https';
+import { URL } from 'node:url';
 import {
   iikoAuthFailed,
   iikoMenuJsonParseFailed,
@@ -26,6 +29,28 @@ import { redactDeep, sanitizeMessage } from '../lib/redaction.js';
  * не создаёт прайс-приказы.
  */
 
+/**
+ * Результат вызова https.request-подобной функции.
+ * Используется и для production (node:https.request), и для тестовых моков.
+ */
+export interface IikoHttpsRequestResult {
+  status: number;
+  headers: Record<string, string | string[] | undefined>;
+  body: string;
+}
+
+/**
+ * Тип функции-транспорта https.request, инъектируемой в IikoClient.
+ * Принимает URL, заголовки и тело; возвращает статус, заголовки и тело ответа.
+ * Не выполняет retry — это ответственность вызывающей стороны.
+ */
+export type IikoHttpsRequestFn = (
+  url: string,
+  headers: Record<string, string>,
+  body: string,
+  timeoutMs: number,
+) => Promise<IikoHttpsRequestResult>;
+
 export interface IikoClientOptions {
   /** База авторизации, например https://api-ru.iiko.services/api/v2. */
   authBaseUrl: string;
@@ -51,6 +76,18 @@ export interface IikoClientOptions {
   logger: IikoLogger;
   now?: () => number;
   fetchImpl?: typeof fetch;
+  /**
+   * Опциональная реализация node:https.request для тестов.
+   * В production используется реальный node:https.request.
+   */
+  httpsRequestImpl?: IikoHttpsRequestFn;
+  /**
+   * Принудительный транспорт для production-запросов меню.
+   * По умолчанию 'fetch'. Если fetch возвращает HTML 5xx, executeMenuRequest
+   * автоматически переключается на https_request в рамках того же вызова.
+   * Это поле позволяет зафиксировать транспорт после диагностики.
+   */
+  menuTransport?: 'fetch' | 'https_request';
   onAttempt?: (attempt: IikoAttemptRecord) => void | Promise<void>;
   /** Запас времени до истечения токена, по умолчанию 5 минут. */
   tokenSafetyWindowMs?: number;
@@ -134,9 +171,13 @@ export interface IikoMenuRequestDiagnostics {
   tokenPresent: boolean;
   tokenLength: number;
   authorizationScheme: 'Bearer';
+  outboundHeaderNames: string[];
+  userAgent: string;
+  contentType: 'application/json';
   upstreamStatus: number | null;
   upstreamContentType: string | null;
   correlationId: string | null;
+  responseTextSha256: string | null;
   responseText: string | null;
   errorKind:
     | 'UPSTREAM_HTTP_ERROR'
@@ -144,6 +185,47 @@ export interface IikoMenuRequestDiagnostics {
     | 'TIMEOUT'
     | 'JSON_PARSE_ERROR'
     | null;
+  durationMs: number;
+}
+
+/**
+ * Результат одного транспорта (fetch или https.request) в transport-test.
+ * Никогда не содержит токен, секреты или полное тело ответа.
+ */
+export interface IikoMenuTransportProbe {
+  transport: 'fetch' | 'https_request';
+  success: boolean;
+  httpStatus: number | null;
+  contentType: string | null;
+  correlationId: string | null;
+  responseTextSha256: string | null;
+  responseTextPreview: string | null;
+  errorKind: IikoMenuRequestDiagnostics['errorKind'];
+  error: string | null;
+  durationMs: number;
+}
+
+/**
+ * Сравнительная диагностика двух транспортов для запроса меню iiko.
+ * Сначала выполняется fetch; если fetch вернул HTML 5xx, выполняется
+ * https.request с теми же URL, заголовками и телом.
+ */
+export interface IikoMenuTransportDiagnostics {
+  finalUrl: string;
+  method: 'POST';
+  outboundHeaderNames: string[];
+  userAgent: string;
+  contentType: 'application/json';
+  bodyKeys: ['externalMenuId', 'organizationIds'];
+  externalMenuIdType: 'string';
+  organizationIdsType: 'array';
+  organizationIdsCount: number;
+  tokenPresent: boolean;
+  tokenLength: number;
+  authorizationScheme: 'Bearer';
+  fetch: IikoMenuTransportProbe;
+  httpsRequest: IikoMenuTransportProbe | null;
+  recommendedTransport: 'fetch' | 'https_request';
   durationMs: number;
 }
 
@@ -165,6 +247,8 @@ export class IikoClient {
   > &
     IikoClientOptions;
   private readonly fetchImpl: typeof fetch;
+  private readonly httpsRequestFn: IikoHttpsRequestFn;
+  private readonly menuTransport: 'fetch' | 'https_request';
   private readonly now: () => number;
   /** Корень API без версии: https://api-ru.iiko.services — для legacy v1 endpoints. */
   private readonly apiRoot: string;
@@ -177,6 +261,8 @@ export class IikoClient {
   constructor(options: IikoClientOptions) {
     this.options = options;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.httpsRequestFn = options.httpsRequestImpl ?? defaultHttpsRequest;
+    this.menuTransport = options.menuTransport ?? 'fetch';
     this.now = options.now ?? (() => Date.now());
     // authBaseUrl = https://api-ru.iiko.services/api/v2  -> authUrl  = .../api/v2/access_token
     // menuBaseUrl = https://api-ru.iiko.services/api/2   -> menuUrl  = .../api/2/menu/by_id
@@ -320,22 +406,37 @@ export class IikoClient {
       throw iikoMenuRequestFailed({ safeUpstreamError: validationError });
     }
 
-    let response: Response;
-    let responseText: string;
-    try {
-      response = await this.fetchImpl(menuUrl, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body: JSON.stringify(menuBody),
-      });
-      responseText = await response.text();
-    } catch (error) {
-      const errorKind = this.classifyTransportError(error);
-      const safeMessage = this.sanitizeMenuText(errorMessageOf(error), accessToken);
+    const headers = buildPostmanMenuHeaders(accessToken);
+    const serializedBody = JSON.stringify(menuBody);
+
+    // Шаг 1: основной транспорт (fetch по умолчанию, https_request если зафиксировано).
+    let fetchResult: IikoTransportOutcome | null = null;
+    let httpsResult: IikoTransportOutcome | null = null;
+
+    if (this.menuTransport === 'https_request') {
+      httpsResult = await this.runHttpsMenuTransport(menuUrl, headers, serializedBody, accessToken, menuBody, startedAt);
+    } else {
+      fetchResult = await this.runFetchMenuTransport(menuUrl, headers, serializedBody, accessToken, menuBody, startedAt);
+    }
+
+    // Шаг 2: если fetch вернул HTML 5xx — пробуем https.request как fallback.
+    if (
+      fetchResult &&
+      fetchResult.kind === 'http' &&
+      isHtmlServerError(fetchResult.status, fetchResult.text)
+    ) {
+      httpsResult = await this.runHttpsMenuTransport(menuUrl, headers, serializedBody, accessToken, menuBody, startedAt);
+    }
+
+    const primary = httpsResult ?? fetchResult;
+    if (!primary) {
+      // Не должно происходить, но защищаем типами.
+      throw iikoMenuRequestFailed({ safeUpstreamError: 'Транспорт меню не выполнен.' });
+    }
+
+    if (primary.kind === 'network') {
+      const errorKind = primary.errorKind;
+      const safeMessage = primary.safeMessage;
       this.lastMenuDiagnostics = this.buildMenuDiagnostics(
         accessToken,
         menuBody,
@@ -343,8 +444,9 @@ export class IikoClient {
         null,
         null,
         safeMessage,
-        errorKind,
+        null,
         startedAt,
+        errorKind,
       );
       await this.recordMenuFailure(
         errorKind === 'TIMEOUT' ? 'TIMEOUT' : 'NETWORK_ERROR',
@@ -355,48 +457,52 @@ export class IikoClient {
       throw iikoMenuNetworkError(safeMessage);
     }
 
-    const upstreamContentType = response.headers.get('content-type');
-    const diagnosticJson = safeJsonParse(responseText);
+    const status = primary.status;
+    const text = primary.text;
+    const upstreamContentType = primary.contentType;
+    const diagnosticJson = safeJsonParse(text);
     const correlationId = optionalString(asRecord(diagnosticJson)?.correlationId) ?? null;
-    const safeResponseText = this.sanitizeMenuText(responseText, accessToken).slice(0, 1000);
+    const safeResponseText = this.sanitizeMenuText(text, accessToken).slice(0, 1000);
 
-    if (!response.ok) {
+    if (status < 200 || status >= 300) {
       this.lastMenuDiagnostics = this.buildMenuDiagnostics(
         accessToken,
         menuBody,
-        response.status,
+        status,
         upstreamContentType,
         correlationId,
         safeResponseText,
-        'UPSTREAM_HTTP_ERROR',
+        text,
         startedAt,
+        'UPSTREAM_HTTP_ERROR',
       );
-      await this.recordMenuFailure(`HTTP_${response.status}`, safeResponseText, startedAt, response.status, correlationId);
+      await this.recordMenuFailure(`HTTP_${status}`, safeResponseText, startedAt, status, correlationId);
       throw iikoMenuRequestFailed({
-        upstreamStatus: response.status,
+        upstreamStatus: status,
         correlationId,
-        safeUpstreamError: safeResponseText || `HTTP ${response.status}`,
+        safeUpstreamError: safeResponseText || `HTTP ${status}`,
       });
     }
 
     let body: unknown;
     try {
-      body = JSON.parse(responseText) as unknown;
+      body = JSON.parse(text) as unknown;
     } catch {
       const safeMessage = 'iiko вернул HTTP 2xx, но тело полного меню не является JSON.';
       this.lastMenuDiagnostics = this.buildMenuDiagnostics(
         accessToken,
         menuBody,
-        response.status,
+        status,
         upstreamContentType,
         correlationId,
         safeResponseText,
-        'JSON_PARSE_ERROR',
+        text,
         startedAt,
+        'JSON_PARSE_ERROR',
       );
-      await this.recordMenuFailure('JSON_PARSE_ERROR', safeMessage, startedAt, response.status, correlationId);
+      await this.recordMenuFailure('JSON_PARSE_ERROR', safeMessage, startedAt, status, correlationId);
       throw iikoMenuJsonParseFailed({
-        upstreamStatus: response.status,
+        upstreamStatus: status,
         correlationId,
         safeMessage,
       });
@@ -405,23 +511,237 @@ export class IikoClient {
     this.lastMenuDiagnostics = this.buildMenuDiagnostics(
       accessToken,
       menuBody,
-      response.status,
+      status,
       upstreamContentType,
       correlationId,
       safeResponseText,
-      null,
+      text,
       startedAt,
+      null,
     );
     await this.record({
       operation: 'menu_by_id',
       status: 'SUCCESS',
-      httpStatus: response.status,
+      httpStatus: status,
       durationMs: this.now() - startedAt,
       requestReference: menuUrl,
       organizationId: menuBody.organizationIds[0],
-      responseMetadata: { correlationId, size: responseText.length },
+      responseMetadata: { correlationId, size: text.length },
     });
-    return { body, httpStatus: response.status };
+    return { body, httpStatus: status };
+  }
+
+  /**
+   * Сравнительная диагностика транспортов fetch vs https.request.
+   * Сначала выполняется fetch; если fetch вернул HTML 5xx, выполняется
+   * https.request с теми же URL, заголовками и телом. Возвращает безопасные
+   * fingerprints обоих транспортов без токена, секретов или полного тела.
+   */
+  async diagnoseMenuTransport(): Promise<IikoMenuTransportDiagnostics> {
+    const startedAt = this.now();
+    this.ensureConfigured();
+    const accessToken = (await this.getAccessToken(true)).trim().replace(/^Bearer\s+/i, '');
+    const menuBody = {
+      externalMenuId: String(this.options.externalMenuId),
+      organizationIds: [String(this.options.organizationId)],
+    };
+    const headers = buildPostmanMenuHeaders(accessToken);
+    const serializedBody = JSON.stringify(menuBody);
+
+    const fetchProbe = await this.probeFetchTransport(IIKO_MENU_BY_ID_URL, headers, serializedBody, accessToken);
+    let httpsProbe: IikoMenuTransportProbe | null = null;
+    if (isHtmlServerErrorProbe(fetchProbe)) {
+      httpsProbe = await this.probeHttpsTransport(IIKO_MENU_BY_ID_URL, headers, serializedBody, accessToken);
+    }
+
+    const recommendedTransport: 'fetch' | 'https_request' =
+      httpsProbe && httpsProbe.success && !fetchProbe.success
+        ? 'https_request'
+        : fetchProbe.success
+          ? 'fetch'
+          : httpsProbe && httpsProbe.success
+            ? 'https_request'
+            : 'fetch';
+
+    return {
+      finalUrl: IIKO_MENU_BY_ID_URL,
+      method: 'POST',
+      outboundHeaderNames: Object.keys(headers),
+      userAgent: POSTMAN_USER_AGENT,
+      contentType: 'application/json',
+      bodyKeys: ['externalMenuId', 'organizationIds'],
+      externalMenuIdType: 'string',
+      organizationIdsType: 'array',
+      organizationIdsCount: menuBody.organizationIds.length,
+      tokenPresent: accessToken.length > 0,
+      tokenLength: accessToken.length,
+      authorizationScheme: 'Bearer',
+      fetch: fetchProbe,
+      httpsRequest: httpsProbe,
+      recommendedTransport,
+      durationMs: this.now() - startedAt,
+    };
+  }
+
+  private async runFetchMenuTransport(
+    url: string,
+    headers: Record<string, string>,
+    serializedBody: string,
+    accessToken: string,
+    menuBody: { externalMenuId: string; organizationIds: string[] },
+    startedAt: number,
+  ): Promise<IikoTransportOutcome> {
+    try {
+      const response = await this.fetchImpl(url, {
+        method: 'POST',
+        headers,
+        body: serializedBody,
+      });
+      const text = await response.text();
+      return {
+        kind: 'http',
+        status: response.status,
+        contentType: response.headers.get('content-type'),
+        text,
+      };
+    } catch (error) {
+      const errorKind = this.classifyTransportError(error);
+      const safeMessage = this.sanitizeMenuText(errorMessageOf(error), accessToken);
+      this.lastMenuDiagnostics = this.buildMenuDiagnostics(
+        accessToken,
+        menuBody,
+        null,
+        null,
+        null,
+        safeMessage,
+        null,
+        startedAt,
+        errorKind,
+      );
+      return { kind: 'network', errorKind, safeMessage };
+    }
+  }
+
+  private async runHttpsMenuTransport(
+    url: string,
+    headers: Record<string, string>,
+    serializedBody: string,
+    accessToken: string,
+    menuBody: { externalMenuId: string; organizationIds: string[] },
+    startedAt: number,
+  ): Promise<IikoTransportOutcome> {
+    try {
+      const result = await this.httpsRequestFn(url, headers, serializedBody, this.options.timeoutMs);
+      const contentType = pickHeader(result.headers, 'content-type');
+      return {
+        kind: 'http',
+        status: result.status,
+        contentType,
+        text: result.body,
+      };
+    } catch (error) {
+      const errorKind = this.classifyTransportError(error);
+      const safeMessage = this.sanitizeMenuText(errorMessageOf(error), accessToken);
+      this.lastMenuDiagnostics = this.buildMenuDiagnostics(
+        accessToken,
+        menuBody,
+        null,
+        null,
+        null,
+        safeMessage,
+        null,
+        startedAt,
+        errorKind,
+      );
+      return { kind: 'network', errorKind, safeMessage };
+    }
+  }
+
+  private async probeFetchTransport(
+    url: string,
+    headers: Record<string, string>,
+    serializedBody: string,
+    accessToken: string,
+  ): Promise<IikoMenuTransportProbe> {
+    const startedAt = this.now();
+    try {
+      const response = await this.fetchImpl(url, {
+        method: 'POST',
+        headers,
+        body: serializedBody,
+      });
+      const text = await response.text();
+      const contentType = response.headers.get('content-type');
+      const correlationId = extractCorrelationId(text);
+      return {
+        transport: 'fetch',
+        success: response.ok && !isHtmlBody(text),
+        httpStatus: response.status,
+        contentType,
+        correlationId,
+        responseTextSha256: sha256Hex(text),
+        responseTextPreview: this.sanitizeMenuText(text, accessToken).slice(0, 300),
+        errorKind: null,
+        error: null,
+        durationMs: this.now() - startedAt,
+      };
+    } catch (error) {
+      const errorKind = this.classifyTransportError(error);
+      return {
+        transport: 'fetch',
+        success: false,
+        httpStatus: null,
+        contentType: null,
+        correlationId: null,
+        responseTextSha256: null,
+        responseTextPreview: null,
+        errorKind,
+        error: this.sanitizeMenuText(errorMessageOf(error), accessToken).slice(0, 300),
+        durationMs: this.now() - startedAt,
+      };
+    }
+  }
+
+  private async probeHttpsTransport(
+    url: string,
+    headers: Record<string, string>,
+    serializedBody: string,
+    accessToken: string,
+  ): Promise<IikoMenuTransportProbe> {
+    const startedAt = this.now();
+    try {
+      const result = await this.httpsRequestFn(url, headers, serializedBody, this.options.timeoutMs);
+      const contentType = pickHeader(result.headers, 'content-type');
+      const text = result.body;
+      const correlationId = extractCorrelationId(text);
+      const ok = result.status >= 200 && result.status < 300 && !isHtmlBody(text);
+      return {
+        transport: 'https_request',
+        success: ok,
+        httpStatus: result.status,
+        contentType,
+        correlationId,
+        responseTextSha256: sha256Hex(text),
+        responseTextPreview: this.sanitizeMenuText(text, accessToken).slice(0, 300),
+        errorKind: null,
+        error: null,
+        durationMs: this.now() - startedAt,
+      };
+    } catch (error) {
+      const errorKind = this.classifyTransportError(error);
+      return {
+        transport: 'https_request',
+        success: false,
+        httpStatus: null,
+        contentType: null,
+        correlationId: null,
+        responseTextSha256: null,
+        responseTextPreview: null,
+        errorKind,
+        error: this.sanitizeMenuText(errorMessageOf(error), accessToken).slice(0, 300),
+        durationMs: this.now() - startedAt,
+      };
+    }
   }
 
   private async recordMenuFailure(
@@ -468,8 +788,9 @@ export class IikoClient {
     upstreamContentType: string | null,
     correlationId: string | null,
     responseText: string | null,
-    errorKind: IikoMenuRequestDiagnostics['errorKind'],
+    rawResponseText: string | null,
     startedAt: number,
+    errorKind: IikoMenuRequestDiagnostics['errorKind'] = null,
   ): IikoMenuRequestDiagnostics {
     return {
       finalUrl: IIKO_MENU_BY_ID_URL,
@@ -481,9 +802,13 @@ export class IikoClient {
       tokenPresent: accessToken.length > 0,
       tokenLength: accessToken.length,
       authorizationScheme: 'Bearer',
+      outboundHeaderNames: [...POSTMAN_HEADER_NAMES],
+      userAgent: POSTMAN_USER_AGENT,
+      contentType: 'application/json',
       upstreamStatus,
       upstreamContentType,
       correlationId,
+      responseTextSha256: rawResponseText ? sha256Hex(rawResponseText) : null,
       responseText,
       errorKind,
       durationMs: this.now() - startedAt,
@@ -505,8 +830,9 @@ export class IikoClient {
       null,
       null,
       responseText.slice(0, 1000),
-      errorKind,
+      null,
       startedAt,
+      errorKind,
     );
   }
 
@@ -1025,4 +1351,150 @@ function errorMessageOf(error: unknown): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ---------------------------------------------------------------------------
+// Postman-equivalent request profile for POST /api/2/menu/by_id
+// ---------------------------------------------------------------------------
+
+const POSTMAN_USER_AGENT = 'PostmanRuntime/7.43.0';
+const POSTMAN_ACCEPT = '*/*';
+const POSTMAN_ACCEPT_LANGUAGE = 'en-US,en;q=0.9';
+const POSTMAN_CONNECTION = 'keep-alive';
+
+/**
+ * Имена заголовков в порядке Postman. Используется только для diagnostics
+ * (имена, не значения). Никогда не включает Content-Length, Host,
+ * Transfer-Encoding, Accept-Encoding — их устанавливает сам транспорт.
+ */
+const POSTMAN_HEADER_NAMES = [
+  'Authorization',
+  'Content-Type',
+  'Accept',
+  'Accept-Language',
+  'User-Agent',
+  'Connection',
+] as const;
+
+/**
+ * Строит заголовки, эквивалентные профилю Postman для /api/2/menu/by_id.
+ * Не включает Content-Length, Host, Transfer-Encoding, Accept-Encoding —
+ * их устанавливает транспорт (fetch/undici или node:https).
+ */
+function buildPostmanMenuHeaders(accessToken: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${accessToken}`,
+    'Content-Type': 'application/json',
+    Accept: POSTMAN_ACCEPT,
+    'Accept-Language': POSTMAN_ACCEPT_LANGUAGE,
+    'User-Agent': POSTMAN_USER_AGENT,
+    Connection: POSTMAN_CONNECTION,
+  };
+}
+
+/** Возвращает SHA-256 hex от текста ответа (для diagnostics fingerprint). */
+function sha256Hex(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
+}
+
+/** Извлекает correlationId из JSON-тела ответа (если оно JSON). */
+function extractCorrelationId(text: string): string | null {
+  const parsed = safeJsonParse(text);
+  return optionalString(asRecord(parsed)?.correlationId) ?? null;
+}
+
+/** Возвращает значение заголовка (последнее, если массив) в нижнем регистре ключа. */
+function pickHeader(
+  headers: Record<string, string | string[] | undefined>,
+  name: string,
+): string | null {
+  const lower = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lower) {
+      if (Array.isArray(value)) return value[value.length - 1] ?? null;
+      return value ?? null;
+    }
+  }
+  return null;
+}
+
+/** Детектит HTML Symfony error page (или любой HTML-ответ). */
+function isHtmlBody(text: string): boolean {
+  const head = text.slice(0, 600).toLowerCase();
+  return head.includes('<!doctype html') || head.includes('<html');
+}
+
+/** Детектит HTML 5xx — сценарий, при котором fetch получает Symfony error page. */
+function isHtmlServerError(status: number, text: string): boolean {
+  return status >= 500 && isHtmlBody(text);
+}
+
+/** Детектит HTML 5xx по probe-результату транспорта. */
+function isHtmlServerErrorProbe(probe: IikoMenuTransportProbe): boolean {
+  return (
+    !probe.success &&
+    probe.httpStatus !== null &&
+    probe.httpStatus >= 500 &&
+    probe.responseTextPreview !== null &&
+    isHtmlBody(probe.responseTextPreview)
+  );
+}
+
+/**
+ * Внутренний результат одного транспортного вызова меню.
+ * - kind: 'http' — получили HTTP-ответ (любой статус).
+ * - kind: 'network' — сетевая ошибка или timeout.
+ */
+type IikoTransportOutcome =
+  | { kind: 'http'; status: number; contentType: string | null; text: string }
+  | { kind: 'network'; errorKind: 'NETWORK_ERROR' | 'TIMEOUT'; safeMessage: string };
+
+/**
+ * Production-реализация node:https.request для POST JSON-запроса.
+ * Не выполняет retry. Сохраняет TLS-верификацию (rejectUnauthorized по умолчанию true).
+ * Не использует insecure TLS-настройки.
+ */
+function defaultHttpsRequest(
+  url: string,
+  headers: Record<string, string>,
+  body: string,
+  timeoutMs: number,
+): Promise<IikoHttpsRequestResult> {
+  return new Promise((resolve, reject) => {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    const options: RequestOptions = {
+      method: 'POST',
+      hostname: parsed.hostname,
+      port: parsed.port || 443,
+      path: `${parsed.pathname}${parsed.search}`,
+      headers,
+    };
+    const req = httpsRequest(options, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
+      res.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8');
+        const headers: Record<string, string | string[] | undefined> = {};
+        // node: IncomingHttpHeaders использует lowercase ключи.
+        for (const [key, value] of Object.entries(res.headers)) {
+          if (value !== undefined) headers[key] = value;
+        }
+        resolve({ status: res.statusCode ?? 0, headers, body });
+      });
+      res.on('error', reject);
+    });
+    req.on('timeout', () => {
+      req.destroy(new Error('https.request timed out'));
+    });
+    req.on('error', reject);
+    req.setTimeout(timeoutMs);
+    req.write(body);
+    req.end();
+  });
 }

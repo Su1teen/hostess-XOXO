@@ -130,6 +130,26 @@ export async function iikoRoutes(app: FastifyInstance): Promise<void> {
     async () => app.services.iikoClient.diagnoseMenuRequest(),
   );
 
+  app.post(
+    `${API_PREFIX}/admin/iiko/menu-transport-test`,
+    {
+      preHandler: app.requireAdmin,
+      schema: {
+        tags: ['iiko'],
+        summary:
+          'Сравнить транспорты fetch и https.request для POST /api/2/menu/by_id (Postman-эквивалент)',
+        description:
+          'Выполняет fetch первым; если fetch вернул HTML 5xx (Symfony error page), выполняет ' +
+          'https.request с теми же URL, заголовками и телом. Возвращает безопасные fingerprints ' +
+          'обоих транспортов: outbound header names, User-Agent, content-type, response HTTP status, ' +
+          'response content-type, response text SHA-256, response text first 300 chars (redacted), ' +
+          'duration, correlationId. Никогда не возвращает токен или секреты.',
+        security: [{ adminApiKey: [] }],
+      },
+    },
+    async () => app.services.iikoClient.diagnoseMenuTransport(),
+  );
+
   app.get(
     `${API_PREFIX}/admin/iiko/menu-request-diagnostics`,
     {
