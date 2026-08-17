@@ -59,6 +59,25 @@ export interface ParsedMenuResult {
   skippedMalformedPrice: number;
   skippedAmbiguousPrice: number;
   warnings: string[];
+  /**
+   * Безопасная диагностика первого item+size для разработки.
+   * Никогда не содержит API key, token, client secret или полное меню.
+   * Содержит только имена полей и типы — не значения.
+   */
+  diagnostic: ParserDiagnostic | null;
+}
+
+/**
+ * Безопасная диагностика парсера для одного sample item+size.
+ * Только имена/типы — никогда не значения секретов или сырого тела.
+ */
+export interface ParserDiagnostic {
+  firstItemName: string | null;
+  firstSizeName: string | null;
+  pricesArrayLength: number;
+  priceValueType: 'number' | 'string' | 'boolean' | 'object' | 'undefined' | 'null' | null;
+  priceObjectKeys: string[];
+  validPositivePriceCount: number;
 }
 
 const NO_SIZE_FALLBACK = '__no_size__';
@@ -131,6 +150,7 @@ export function parseExternalMenu(
   let skippedAmbiguousPrice = 0;
   const variants: ParsedMenuVariant[] = [];
   const currency = options.currency ?? 'KZT';
+  let diagnostic: ParserDiagnostic | null = null;
 
   for (const itemRaw of items) {
     const item = asRecord(itemRaw);
@@ -145,7 +165,8 @@ export function parseExternalMenu(
       isFlagTrue(item?.hidden) ||
       isFlagTrue(item?.disabled) ||
       isFlagTrue(item?.isDeleted) ||
-      isFlagTrue(item?.archived)
+      isFlagTrue(item?.archived) ||
+      isFlagTrue(item?.isHidden)
     ) {
       skippedHidden += 1;
       continue;
@@ -190,6 +211,11 @@ export function parseExternalMenu(
       if (prices.length === 0) {
         skippedZeroPrice += 1;
         continue;
+      }
+
+      // Собираем safe-диагностику для первого item+size с prices.
+      if (!diagnostic) {
+        diagnostic = buildParserDiagnostic(itemName, sizeName, prices);
       }
 
       const chosen = choosePrice(prices, options.organizationId, warnings, itemId, sizeId);
@@ -250,6 +276,7 @@ export function parseExternalMenu(
     skippedMalformedPrice,
     skippedAmbiguousPrice,
     warnings,
+    diagnostic,
   };
 }
 
@@ -261,7 +288,8 @@ type PriceChoice =
 
 /**
  * Выбирает применимую цену для размера.
- * - prefer цену с organizations, содержащим organizationId;
+ * - prefer цену с organizationId (single string) или organizations (array),
+ *   содержащим organizationId;
  * - иначе, если положительная цена единственна — берём её;
  * - если положительных цен несколько и нет орг-матча — ambiguous (пропуск),
  *   НЕ используем max price как каноническую.
@@ -288,8 +316,17 @@ function choosePrice(
       // null/0/отрицательные/NaN — пропускаем эту цену.
       continue;
     }
+    // Поддерживаем два формата iiko:
+    //   - newer: { organizationId: "uuid", price: "2500" }
+    //   - older: { organizations: ["uuid"], price: 2500 }
+    const orgIdField = optionalString(priceRecord?.organizationId);
     const orgs = asArray(priceRecord?.organizations);
-    if (orgs.length > 0) {
+    if (orgIdField) {
+      if (orgIdField === organizationId) {
+        orgMatches.push(candidate);
+      }
+      // Цена с organizationId, но не нашим — не учитываем как generic.
+    } else if (orgs.length > 0) {
       const belongs = orgs.some(
         (org) => optionalString(asRecord(org)?.id) === organizationId,
       );
@@ -333,17 +370,112 @@ function buildDisplayName(name: string, sizeName: string | null): string {
   return name;
 }
 
-/** Извлекает числовую цену из price-объекта. Возвращает null для мусора. */
+/**
+ * Нормализует значение цены из любого примитивного типа.
+ * Принимает:
+ *   - number (2500, 25.5);
+ *   - numeric string ("2500");
+ *   - decimal string ("2500.00");
+ *   - comma decimal string ("2500,00").
+ * Возвращает number > 0 или null для мусора/нуля/отрицательных.
+ */
+export function normalizePositivePrice(value: unknown): number | null {
+  const parsed = parsePriceValue(value);
+  if (parsed === null) return null;
+  return parsed > 0 ? parsed : null;
+}
+
+/**
+ * Разбирает значение цены в number (включая 0 и отрицательные).
+ * Возвращает null только для непарсируемого мусора.
+ * Используется внутри readPrice, где нужно отличать "ноль" от "мусор".
+ */
+function parsePriceValue(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string') {
+    const normalized = Number(value.trim().replace(',', '.'));
+    return Number.isFinite(normalized) ? normalized : null;
+  }
+  return null;
+}
+
+/**
+ * Извлекает числовую цену из price-объекта iiko.
+ * Проверяет все возможные расположения цены в реальном ответе /api/2/menu/by_id:
+ *   - priceRecord.price          (number или string — основной формат v2 menu);
+ *   - priceRecord.price.currentPrice (вложенный объект — формат v1 nomenclature);
+ *   - priceRecord.amount         (альтернативное имя);
+ *   - priceRecord.value          (альтернативное имя).
+ * Возвращает number (включая 0 и отрицательные) или null для мусора.
+ * Вызывающий (choosePrice) решает, является ли цена положительной.
+ */
 function readPrice(priceRecord: Record<string, unknown> | undefined): number | null {
   if (!priceRecord) return null;
-  const direct = priceRecord.price;
-  const current = asRecord(priceRecord.price)?.currentPrice;
-  const candidate =
-    typeof direct === 'number' ? direct : typeof current === 'number' ? current : undefined;
-  if (candidate === undefined) return null;
-  if (Number.isNaN(candidate)) return null;
-  if (!Number.isFinite(candidate)) return null;
-  return candidate;
+
+  // 1. price как примитив (number или string) — основной формат /api/2/menu/by_id.
+  const directPrice = priceRecord.price;
+  if (typeof directPrice === 'number' || typeof directPrice === 'string') {
+    return parsePriceValue(directPrice);
+  }
+
+  // 2. price как объект с currentPrice — формат v1 nomenclature sizePrices.
+  const priceObj = asRecord(directPrice);
+  if (priceObj) {
+    const current = parsePriceValue(priceObj.currentPrice);
+    if (current !== null) return current;
+  }
+
+  // 3. amount — альтернативное имя.
+  const amount = parsePriceValue(priceRecord.amount);
+  if (amount !== null) return amount;
+
+  // 4. value — альтернативное имя.
+  const value = parsePriceValue(priceRecord.value);
+  if (value !== null) return value;
+
+  return null;
+}
+
+/**
+ * Строит безопасную диагностику парсера для первого item+size с prices.
+ * Никогда не содержит значения секретов или полное тело меню — только
+ * имена полей, типы и агрегированные счётчики.
+ */
+function buildParserDiagnostic(
+  itemName: string,
+  sizeName: string | null,
+  prices: unknown[],
+): ParserDiagnostic {
+  const firstPrice = asRecord(prices[0]);
+  const priceValue = firstPrice?.price;
+  let priceValueType: ParserDiagnostic['priceValueType'] = null;
+  if (priceValue === undefined) priceValueType = 'undefined';
+  else if (priceValue === null) priceValueType = 'null';
+  else if (typeof priceValue === 'number') priceValueType = 'number';
+  else if (typeof priceValue === 'string') priceValueType = 'string';
+  else if (typeof priceValue === 'boolean') priceValueType = 'boolean';
+  else if (typeof priceValue === 'object') priceValueType = 'object';
+
+  const priceObjectKeys = firstPrice ? Object.keys(firstPrice) : [];
+
+  let validPositivePriceCount = 0;
+  for (const priceRaw of prices) {
+    const parsed = readPrice(asRecord(priceRaw));
+    if (parsed !== null && parsed > 0) {
+      validPositivePriceCount += 1;
+    }
+  }
+
+  return {
+    firstItemName: itemName,
+    firstSizeName: sizeName,
+    pricesArrayLength: prices.length,
+    priceValueType,
+    priceObjectKeys,
+    validPositivePriceCount,
+  };
 }
 
 function isFlagTrue(value: unknown): boolean {
