@@ -45,6 +45,42 @@ APP_TIMEZONE=Asia/Almaty
 Опциональные (по мере подключения интеграций): `IIKO_*`, `TELEGRAM_*`, `FRONT_PLUGIN_*`,
 `PRICE_*`. Полный список с описаниями — в `.env.example`.
 
+### iiko Cloud API (v2)
+
+Бэкенд использует endpoints iiko Cloud API v2:
+
+- `POST /api/v2/access_token` — авторизация по `apiLogin` + `appId` + `clientSecret`.
+  Токен живёт только в памяти процесса и никогда не пишется в БД, логи, ответы,
+  HTML, Swagger или audit log.
+- `POST /api/v2/menu` — запрос внешнего меню с Bearer-токеном.
+  Тело: `{ externalMenuId, organizationIds: [organizationId] }`.
+
+Переменные iiko для Railway:
+
+```env
+IIKO_API_BASE_URL=https://api-ru.iiko.services/api/1
+IIKO_API_KEY=<apiLogin>
+IIKO_APP_ID=<appId>
+IIKO_CLIENT_SECRET=<clientSecret>
+IIKO_AUTH_PATH=/api/v2/access_token
+IIKO_AUTH_RETURN_ADDITIONAL_INFO=false
+IIKO_AUTH_INCLUDE_DISABLED=false
+IIKO_ORGANIZATION_ID=<organizationId>
+IIKO_EXTERNAL_MENU_ID=<externalMenuId>
+IIKO_SYNC_ENABLED=true
+```
+
+`IIKO_API_BASE_URL` исторически содержит `/api/1`, но клиент строит итоговые URL
+от нормализованного корня, поэтому `/api/1` не дублируется: итоговый URL авторизации
+= `https://api-ru.iiko.services/api/v2/access_token`, меню =
+`https://api-ru.iiko.services/api/v2/menu`.
+
+Двухстадийная диагностика (auth + menu) доступна на
+`GET /api/v1/admin/iiko/auth-diagnostics` и в админ-панели (/admin). Эндпоинт
+возвращает upstream HTTP-статус и `correlationId` для каждой стадии, но никогда
+не раскрывает секреты, токен или тело запроса. Ошибки меню отмечаются отдельно и
+не маскируются под `IIKO_AUTH_FAILED`.
+
 Рекомендации:
 
 - `ADMIN_API_KEY` генерируйте как `openssl rand -hex 32`;

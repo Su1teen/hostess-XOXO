@@ -398,37 +398,76 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           );
         });
 
-        function renderIikoAuthDiag(data) {
-          var box = el('iikoAuthDiag');
-          if (!data) { box.innerHTML = '<p class="muted">Нет данных.</p>'; return; }
-          var upstream = data.upstream || {};
-          var status = upstream.httpStatus;
-          var statusCell = status === null
-            ? '<span class="status warn">нет ответа</span>'
-            : (status >= 200 && status < 300
-              ? '<span class="status ok">' + escapeHtml(status) + '</span>'
-              : '<span class="status err">' + escapeHtml(status) + '</span>');
+        function stageStatusCell(stage) {
+          if (!stage) return '<span class="status warn">не выполнялась</span>';
+          var status = stage.httpStatus;
+          if (status === null) {
+            return stage.success
+              ? '<span class="status ok">OK</span>'
+              : '<span class="status warn">нет ответа</span>';
+          }
+          return status >= 200 && status < 300
+            ? '<span class="status ok">' + escapeHtml(status) + '</span>'
+            : '<span class="status err">' + escapeHtml(status) + '</span>';
+        }
+
+        function renderStageTable(title, stage) {
+          if (!stage) {
+            return (
+              '<h2 style="margin-top:12px">' + escapeHtml(title) + '</h2>' +
+              '<p class="muted">Стадия не выполнялась (зависит от предыдущей стадии).</p>'
+            );
+          }
           var rows = [
-            ['URL', escapeHtml(data.finalUrl), false],
-            ['Метод', escapeHtml(data.method), false],
-            ['apiLogin настроен', flag(data.apiLoginConfigured), true],
-            ['appId настроен', flag(data.appIdConfigured), true],
-            ['clientSecret настроен', flag(data.clientSecretConfigured), true],
-            ['Синхронизация включена', flag(data.syncEnabled), true],
-            ['Upstream HTTP статус', statusCell, false],
-            ['Upstream correlationId', upstream.correlationId ? escapeHtml(upstream.correlationId) : '—', false],
-            ['Ошибка', upstream.error ? escapeHtml(upstream.error) : '—', false],
-            ['Длительность, мс', escapeHtml(data.durationMs), false],
+            ['URL', escapeHtml(stage.finalUrl), false],
+            ['Метод', escapeHtml(stage.method), false],
+            ['HTTP статус', stageStatusCell(stage), false],
+            ['correlationId', stage.correlationId ? escapeHtml(stage.correlationId) : '—', false],
+            ['Результат', stage.success
+              ? '<span class="status ok">успех</span>'
+              : '<span class="status err">ошибка</span>', false],
+            ['Ошибка', stage.error ? escapeHtml(stage.error) : '—', false],
+            ['Длительность, мс', escapeHtml(stage.durationMs), false],
           ];
-          box.innerHTML =
-            '<h2 style="margin-top:12px">Диагностика авторизации iiko</h2>' +
+          return (
+            '<h2 style="margin-top:12px">' + escapeHtml(title) + '</h2>' +
             '<table><tbody>' +
             rows
               .map(function (row) {
                 return '<tr><th>' + row[0] + '</th><td>' + row[1] + '</td></tr>';
               })
               .join('') +
+            '</tbody></table>'
+          );
+        }
+
+        function renderIikoAuthDiag(data) {
+          var box = el('iikoAuthDiag');
+          if (!data) { box.innerHTML = '<p class="muted">Нет данных.</p>'; return; }
+          var cfgRows = [
+            ['apiLogin настроен', flag(data.apiLoginConfigured), true],
+            ['appId настроен', flag(data.appIdConfigured), true],
+            ['clientSecret настроен', flag(data.clientSecretConfigured), true],
+            ['externalMenuId настроен', flag(data.externalMenuIdConfigured), true],
+            ['organizationId настроен', flag(data.organizationIdConfigured), true],
+            ['Синхронизация включена', flag(data.syncEnabled), true],
+            ['Общая длительность, мс', escapeHtml(data.durationMs), false],
+          ];
+          var cfgTable =
+            '<h2 style="margin-top:12px">Диагностика iiko: auth + menu</h2>' +
+            '<table><tbody>' +
+            cfgRows
+              .map(function (row) {
+                var value = row[2]
+                  ? '<span class="status ' + statusClass(row[1]) + '">' + escapeHtml(row[1]) + '</span>'
+                  : row[1];
+                return '<tr><th>' + escapeHtml(row[0]) + '</th><td>' + value + '</td></tr>';
+              })
+              .join('') +
             '</tbody></table>';
+          box.innerHTML = cfgTable +
+            renderStageTable('Стадия 1: авторизация (/api/v2/access_token)', data.auth) +
+            renderStageTable('Стадия 2: меню (/api/v2/menu)', data.menu);
         }
         el('btnIikoOrgs').addEventListener('click', function () {
           silent(request('POST', '/api/v1/admin/iiko/sync-organizations').then(loadOrganizations));

@@ -22,10 +22,14 @@ export interface IikoClientOptions {
   apiKey?: string;
   appId?: string;
   clientSecret?: string;
-  /** Путь авторизации относительно baseUrl, по умолчанию /access_token. */
+  /** Путь авторизации относительно корня API, по умолчанию /api/v2/access_token. */
   authPath?: string;
   authReturnAdditionalInfo?: boolean;
   authIncludeDisabled?: boolean;
+  /** Внешнее меню iiko (externalMenuId) для запроса /api/v2/menu. */
+  externalMenuId?: string;
+  /** Организация по умолчанию (organizationId) для запроса /api/v2/menu. */
+  organizationId?: string;
   timeoutMs: number;
   syncEnabled: boolean;
   debugRawPayloads: boolean;
@@ -105,21 +109,34 @@ export interface IikoTestConnectionResult {
 }
 
 /**
- * Безопасный результат диагностики авторизации iiko.
+ * Безопасный результат одной стадии диагностики iiko.
  * Никогда не содержит значений секретов, apiLogin, токена или тела запроса.
  */
-export interface IikoAuthDiagnostics {
+export interface IikoStageDiagnostics {
   finalUrl: string;
   method: 'POST';
+  httpStatus: number | null;
+  correlationId: string | null;
+  error: string | null;
+  durationMs: number;
+  success: boolean;
+}
+
+/**
+ * Безопасный результат диагностики авторизации и меню iiko.
+ * Содержит две независимые стадии: auth и menu. Если auth не удался или
+ * меню не настроено, стадия menu равна null. Ошибки меню никогда не
+ * маскируются под ошибки авторизации.
+ */
+export interface IikoAuthDiagnostics {
   apiLoginConfigured: boolean;
   appIdConfigured: boolean;
   clientSecretConfigured: boolean;
+  externalMenuIdConfigured: boolean;
+  organizationIdConfigured: boolean;
   syncEnabled: boolean;
-  upstream: {
-    httpStatus: number | null;
-    correlationId: string | null;
-    error: string | null;
-  };
+  auth: IikoStageDiagnostics;
+  menu: IikoStageDiagnostics | null;
   durationMs: number;
 }
 
@@ -140,6 +157,7 @@ export class IikoClient {
   private readonly now: () => number;
   private readonly rootUrl: string;
   private readonly authUrl: string;
+  private readonly menuUrl: string;
   private readonly authPath: string;
   private tokenState: TokenState | null = null;
   private inflightToken: Promise<string> | null = null;
@@ -149,8 +167,12 @@ export class IikoClient {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.now = options.now ?? (() => Date.now());
     this.rootUrl = normalizeRootUrl(options.baseUrl);
-    this.authPath = normalizeAuthPath(options.authPath ?? '/access_token');
-    this.authUrl = buildAuthUrl(options.baseUrl, this.authPath);
+    this.authPath = normalizeAuthPath(options.authPath ?? '/api/v2/access_token');
+    // authUrl строится от нормализованного корня (без /api/1), поэтому
+    // IIKO_API_BASE_URL=https://api-ru.iiko.services/api/1 + IIKO_AUTH_PATH=/api/v2/access_token
+    // => https://api-ru.iiko.services/api/v2/access_token (без дублирования /api/1).
+    this.authUrl = buildAuthUrl(this.rootUrl, this.authPath);
+    this.menuUrl = `${this.rootUrl}/api/v2/menu`;
   }
 
   get isConfigured(): boolean {
@@ -244,26 +266,25 @@ export class IikoClient {
   }
 
   /**
-   * Внешние меню (iiko API v2). Нужны только если у бара настроены внешние меню
-   * с ценовыми категориями; для v0.1 используется как дополнительная диагностика.
+   * Внешнее меню iiko (API v2): POST /api/v2/menu.
+   * Тело: { externalMenuId, organizationIds: [organizationId] }.
+   * Токен получается автоматически и кэшируется только в памяти.
    */
-  async getExternalMenuOrMenu(organizationId: string): Promise<{
-    externalMenus: Array<{ id: string; name: string }>;
-    priceCategories: Array<{ id: string; name: string }>;
-  }> {
-    const { body } = await this.authorizedRequest<{
-      externalMenus?: unknown;
-      priceCategories?: unknown;
-    }>('/api/2/menu', { organizationIds: [organizationId] }, 'menu_v2', organizationId);
-
-    return {
-      externalMenus: asArray(body.externalMenus)
-        .map((item) => normalizeIdName(item))
-        .filter(isDefined),
-      priceCategories: asArray(body.priceCategories)
-        .map((item) => normalizeIdName(item))
-        .filter(isDefined),
-    };
+  async getExternalMenuOrMenu(
+    organizationId: string,
+    externalMenuId?: string,
+  ): Promise<unknown> {
+    const menuId = externalMenuId ?? this.options.externalMenuId;
+    if (!menuId) {
+      throw iikoNotConfigured();
+    }
+    const { body } = await this.authorizedRequest<unknown>(
+      '/api/v2/menu',
+      { externalMenuId: menuId, organizationIds: [organizationId] },
+      'menu_v2',
+      organizationId,
+    );
+    return body;
   }
 
   async getStopList(organizationId: string): Promise<IikoStopListItem[]> {
@@ -325,33 +346,87 @@ export class IikoClient {
   }
 
   /**
-   * Безопасная диагностика авторизации iiko. Выполняет реальный POST-запрос
-   * к /access_token, но никогда не выбрасывает ошибку и не возвращает токен,
-   * apiLogin, clientSecret или тело запроса. Только факты и upstream-ответ.
+   * Безопасная двухстадийная диагностика iiko: auth и menu.
+   *
+   * Стадия auth: реальный POST к /api/v2/access_token.
+   * Стадия menu: если auth успешен и externalMenuId+organizationId настроены,
+   *   реальный POST к /api/v2/menu с Bearer-токеном из стадии auth.
+   *
+   * Никогда не выбрасывает ошибку и не возвращает токен, apiLogin,
+   * clientSecret или тело запроса. Ошибки меню отмечаются отдельно и никогда
+   * не маскируются под IIKO_AUTH_FAILED.
    */
   async diagnoseAuth(): Promise<IikoAuthDiagnostics> {
     const startedAt = this.now();
     const apiLoginConfigured = Boolean(this.options.apiKey);
     const appIdConfigured = Boolean(this.options.appId);
     const clientSecretConfigured = Boolean(this.options.clientSecret);
+    const externalMenuIdConfigured = Boolean(this.options.externalMenuId);
+    const organizationIdConfigured = Boolean(this.options.organizationId);
 
-    const base: IikoAuthDiagnostics = {
-      finalUrl: this.authUrl,
-      method: 'POST',
+    const authStage = await this.runAuthDiagnosisStage();
+
+    let menuStage: IikoStageDiagnostics | null = null;
+    if (authStage.success) {
+      if (!externalMenuIdConfigured || !organizationIdConfigured) {
+        menuStage = {
+          finalUrl: this.menuUrl,
+          method: 'POST',
+          httpStatus: null,
+          correlationId: null,
+          error:
+            'Меню не запрошено: не заданы IIKO_EXTERNAL_MENU_ID и/или IIKO_ORGANIZATION_ID.',
+          durationMs: 0,
+          success: false,
+        };
+      } else {
+        // Токен из стадии auth используется только для пробы меню и не кэшируется.
+        const token = await this.readFreshTokenForDiagnostics();
+        menuStage = token
+          ? await this.runMenuDiagnosisStage(token)
+          : {
+              finalUrl: this.menuUrl,
+              method: 'POST',
+              httpStatus: null,
+              correlationId: null,
+              error: 'Не удалось получить токен для пробы меню.',
+              durationMs: 0,
+              success: false,
+            };
+      }
+    }
+
+    return {
       apiLoginConfigured,
       appIdConfigured,
       clientSecretConfigured,
+      externalMenuIdConfigured,
+      organizationIdConfigured,
       syncEnabled: this.options.syncEnabled,
-      upstream: { httpStatus: null, correlationId: null, error: null },
+      auth: authStage,
+      menu: menuStage,
+      durationMs: this.now() - startedAt,
+    };
+  }
+
+  /** Стадия auth: POST /api/v2/access_token без Bearer. */
+  private async runAuthDiagnosisStage(): Promise<IikoStageDiagnostics> {
+    const stage: IikoStageDiagnostics = {
+      finalUrl: this.authUrl,
+      method: 'POST',
+      httpStatus: null,
+      correlationId: null,
+      error: null,
       durationMs: 0,
+      success: false,
     };
 
-    if (!apiLoginConfigured || !appIdConfigured || !clientSecretConfigured) {
-      base.upstream.error = 'Не все учётные данные настроены (apiLogin/appId/clientSecret).';
-      base.durationMs = this.now() - startedAt;
-      return base;
+    if (!this.options.apiKey || !this.options.appId || !this.options.clientSecret) {
+      stage.error = 'Не все учётные данные настроены (apiLogin/appId/clientSecret).';
+      return stage;
     }
 
+    const startedAt = this.now();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
     try {
@@ -364,27 +439,117 @@ export class IikoClient {
         body: JSON.stringify(this.buildAuthBody()),
         signal: controller.signal,
       });
-      base.upstream.httpStatus = response.status;
+      stage.httpStatus = response.status;
       const text = await response.text();
       const parsed = safeJsonParse(text);
       const record = asRecord(parsed);
       const correlationId = optionalString(record?.correlationId);
-      base.upstream.correlationId = correlationId ?? null;
+      stage.correlationId = correlationId ?? null;
       if (!response.ok) {
-        base.upstream.error = sanitizeMessage(
+        stage.error = sanitizeMessage(
           extractIikoErrorDescription(parsed) ?? `HTTP ${response.status}`,
         );
+      } else {
+        const token = optionalString(record?.token);
+        if (!token) {
+          stage.error = 'Токен отсутствует в ответе авторизации.';
+        } else {
+          stage.success = true;
+        }
       }
     } catch (error) {
-      base.upstream.error = sanitizeMessage(
+      stage.error = sanitizeMessage(
         isAbortError(error) ? 'TIMEOUT' : errorMessageOf(error),
       );
     } finally {
       clearTimeout(timer);
     }
+    stage.durationMs = this.now() - startedAt;
+    return stage;
+  }
 
-    base.durationMs = this.now() - startedAt;
-    return base;
+  /** Стадия menu: POST /api/v2/menu с Bearer-токеном. */
+  private async runMenuDiagnosisStage(token: string): Promise<IikoStageDiagnostics> {
+    const stage: IikoStageDiagnostics = {
+      finalUrl: this.menuUrl,
+      method: 'POST',
+      httpStatus: null,
+      correlationId: null,
+      error: null,
+      durationMs: 0,
+      success: false,
+    };
+
+    const startedAt = this.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
+    try {
+      const response = await this.fetchImpl(this.menuUrl, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          externalMenuId: this.options.externalMenuId,
+          organizationIds: [this.options.organizationId],
+        }),
+        signal: controller.signal,
+      });
+      stage.httpStatus = response.status;
+      const text = await response.text();
+      const parsed = safeJsonParse(text);
+      const record = asRecord(parsed);
+      const correlationId = optionalString(record?.correlationId);
+      stage.correlationId = correlationId ?? null;
+      if (!response.ok) {
+        // Ошибка меню — отдельная стадия, не подменяет IIKO_AUTH_FAILED.
+        stage.error = sanitizeMessage(
+          extractIikoErrorDescription(parsed) ?? `HTTP ${response.status}`,
+        );
+      } else {
+        stage.success = true;
+      }
+    } catch (error) {
+      stage.error = sanitizeMessage(
+        isAbortError(error) ? 'TIMEOUT' : errorMessageOf(error),
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+    stage.durationMs = this.now() - startedAt;
+    return stage;
+  }
+
+  /**
+   * Получает одноразовый токен для диагностики, не загрязняя кэш tokenState.
+   * Возвращает токен только в память стадии-вызова; никогда не логируется.
+   */
+  private async readFreshTokenForDiagnostics(): Promise<string | null> {
+    if (!this.options.apiKey || !this.options.appId || !this.options.clientSecret) {
+      return null;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
+    try {
+      const response = await this.fetchImpl(this.authUrl, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json',
+        },
+        body: JSON.stringify(this.buildAuthBody()),
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      const parsed = asRecord(safeJsonParse(await response.text()));
+      return optionalString(parsed?.token) ?? null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async authorizedRequest<T>(
@@ -571,15 +736,15 @@ function normalizeAuthPath(path: string): string {
 }
 
 /**
- * Безопасно собирает итоговый URL авторизации из baseUrl и authPath.
- * IIKO_API_BASE_URL=https://api-ru.iiko.services/api/1 + IIKO_AUTH_PATH=/access_token
- * => https://api-ru.iiko.services/api/1/access_token
+ * Безопасно собирает итоговый URL авторизации из нормализованного корня и authPath.
+ * rootUrl = https://api-ru.iiko.services (без /api/1) + IIKO_AUTH_PATH=/api/v2/access_token
+ * => https://api-ru.iiko.services/api/v2/access_token
  *
- * Не дублирует /api/1: путь авторизации присоединяется как есть, без
- * повторного добавления версии API.
+ * Не дублирует /api/1: корень уже очищен от версии, а путь авторизации
+ * содержит свою версию (/api/v2/...).
  */
-function buildAuthUrl(baseUrl: string, authPath: string): string {
-  const normalizedBase = baseUrl.replace(/\/+$/, '');
+function buildAuthUrl(rootUrl: string, authPath: string): string {
+  const normalizedBase = rootUrl.replace(/\/+$/, '');
   const normalizedPath = normalizeAuthPath(authPath);
   return `${normalizedBase}${normalizedPath}`;
 }

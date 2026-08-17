@@ -64,6 +64,7 @@ export async function diagnosticsRoutes(app: FastifyInstance): Promise<void> {
           clientSecret: maskPresence(app.env.IIKO_CLIENT_SECRET),
           authPath: app.env.IIKO_AUTH_PATH,
           organizationIdFromEnv: maskPresence(app.env.IIKO_ORGANIZATION_ID),
+          externalMenuIdFromEnv: maskPresence(app.env.IIKO_EXTERNAL_MENU_ID),
           terminalGroupIdFromEnv: maskPresence(app.env.IIKO_TERMINAL_GROUP_ID),
           debugRawPayloads: app.env.IIKO_DEBUG_RAW_PAYLOADS,
           writeOperations: 'disabled_in_v0.1',
@@ -136,11 +137,13 @@ export async function diagnosticsRoutes(app: FastifyInstance): Promise<void> {
       preHandler: app.requireAdmin,
       schema: {
         tags: ['Admin Diagnostics'],
-        summary: 'Диагностика авторизации iiko (без раскрытия секретов)',
+        summary: 'Двухстадийная диагностика iiko: auth + menu (без раскрытия секретов)',
         description:
-          'Выполняет реальный POST-запрос к /access_token и возвращает только безопасные факты: ' +
-          'итоговый URL, метод, факты настройки учётных данных, upstream HTTP-статус, correlationId ' +
-          'и безопасное сообщение об ошибке. Значения секретов, apiLogin, токена и тела запроса ' +
+          'Выполняет две независимые стадии: (1) POST /api/v2/access_token и (2) при успехе — ' +
+          'POST /api/v2/menu с Bearer-токеном. Возвращает только безопасные факты: итоговые URL, ' +
+          'метод, факты настройки учётных данных, upstream HTTP-статус и correlationId для каждой ' +
+          'стадии, безопасное сообщение об ошибке. Ошибки меню отмечаются отдельно и никогда не ' +
+          'маскируются под IIKO_AUTH_FAILED. Значения секретов, apiLogin, токена и тела запроса ' +
           'никогда не возвращаются.',
         security: [{ adminApiKey: [] }],
       },

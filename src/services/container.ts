@@ -47,6 +47,8 @@ export function createServices(
     authPath: env.IIKO_AUTH_PATH,
     authReturnAdditionalInfo: env.IIKO_AUTH_RETURN_ADDITIONAL_INFO,
     authIncludeDisabled: env.IIKO_AUTH_INCLUDE_DISABLED,
+    externalMenuId: env.IIKO_EXTERNAL_MENU_ID,
+    organizationId: env.IIKO_ORGANIZATION_ID,
     timeoutMs: env.IIKO_REQUEST_TIMEOUT_MS,
     syncEnabled: env.IIKO_SYNC_ENABLED,
     debugRawPayloads: env.IIKO_DEBUG_RAW_PAYLOADS,

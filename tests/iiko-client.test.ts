@@ -30,6 +30,8 @@ function createClient(
     appId?: string;
     clientSecret?: string;
     authPath?: string;
+    externalMenuId?: string;
+    organizationId?: string;
   } = {},
 ): ClientSetup {
   const queue = [...responses];
@@ -48,6 +50,11 @@ function createClient(
     clientSecret:
       'clientSecret' in overrides ? overrides.clientSecret : 'test-client-secret',
     authPath: overrides.authPath,
+    externalMenuId: 'externalMenuId' in overrides ? overrides.externalMenuId : '88042',
+    organizationId:
+      'organizationId' in overrides
+        ? overrides.organizationId
+        : 'cc9baa8d-cfac-4092-9c97-477746fe84e2',
     timeoutMs: 1000,
     syncEnabled: overrides.syncEnabled ?? true,
     debugRawPayloads: false,
@@ -226,7 +233,7 @@ describe('IikoClient', () => {
 
     const urls = fetchMock.mock.calls.map((call) => String(call[0]));
     expect(urls).toEqual([
-      'https://api-ru.iiko.services/api/1/access_token',
+      'https://api-ru.iiko.services/api/v2/access_token',
       'https://api-ru.iiko.services/api/1/organizations',
       'https://api-ru.iiko.services/api/1/nomenclature',
       'https://api-ru.iiko.services/api/1/stop_lists',
@@ -245,28 +252,31 @@ describe('IikoClient', () => {
     expect(body.clientSecret).toBe('test-client-secret');
     expect(body.returnAdditionalInfo).toBe(false);
     expect(body.includeDisabled).toBe(false);
-    // Тело использует apiLogin, не apiKey.
+    // Тело использует apiLogin, не apiKey; organizationId в auth не передаётся.
     expect(body.apiKey).toBeUndefined();
+    expect(body.organizationId).toBeUndefined();
+    expect(body.organizationIds).toBeUndefined();
     // Флаги — настоящие boolean, не строки.
     expect(typeof body.returnAdditionalInfo).toBe('boolean');
     expect(typeof body.includeDisabled).toBe('boolean');
   });
 
-  it('строит URL авторизации без дублирования /api/1', async () => {
+  it('строит URL авторизации v2 без дублирования /api/1', async () => {
     const { client, fetchMock } = createClient([jsonResponse({ token: 't' })]);
     await client.getAccessToken();
     const authUrl = String(fetchMock.mock.calls[0]?.[0]);
-    expect(authUrl).toBe('https://api-ru.iiko.services/api/1/access_token');
-    expect(authUrl.match(/\/api\/1/g)?.length).toBe(1);
+    expect(authUrl).toBe('https://api-ru.iiko.services/api/v2/access_token');
+    // /api/1 не должно быть в URL авторизации вообще.
+    expect(authUrl).not.toContain('/api/1');
   });
 
   it('использует IIKO_AUTH_PATH для построения URL авторизации', async () => {
     const { client, fetchMock } = createClient([jsonResponse({ token: 't' })], {
-      authPath: '/access_token',
+      authPath: '/api/v2/access_token',
     });
     await client.getAccessToken();
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
-      'https://api-ru.iiko.services/api/1/access_token',
+      'https://api-ru.iiko.services/api/v2/access_token',
     );
   });
 
@@ -281,20 +291,61 @@ describe('IikoClient', () => {
     expect(all.client.isConfigured).toBe(true);
   });
 
-  it('diagnoseAuth возвращает безопасную диагностику без токена и секретов', async () => {
+  it('getExternalMenuOrMenu шлёт externalMenuId + organizationIds на /api/v2/menu', async () => {
     const { client, fetchMock } = createClient([
-      jsonResponse({ token: 'session-key', correlationId: 'corr-123' }, 200),
+      jsonResponse({ token: 't' }),
+      jsonResponse({ groups: [] }),
+    ]);
+    await client.getExternalMenuOrMenu('cc9baa8d-cfac-4092-9c97-477746fe84e2');
+
+    const menuUrl = String(fetchMock.mock.calls[1]?.[0]);
+    expect(menuUrl).toBe('https://api-ru.iiko.services/api/v2/menu');
+    const init = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+    expect(body.externalMenuId).toBe('88042');
+    expect(body.organizationIds).toEqual(['cc9baa8d-cfac-4092-9c97-477746fe84e2']);
+    const headers = init.headers as Record<string, string>;
+    expect(headers.authorization).toBe('Bearer t');
+  });
+
+  it('getExternalMenuOrMenu требует externalMenuId', async () => {
+    const { client } = createClient([jsonResponse({ token: 't' })], {
+      externalMenuId: undefined,
+    });
+    await expect(
+      client.getExternalMenuOrMenu('cc9baa8d-cfac-4092-9c97-477746fe84e2'),
+    ).rejects.toMatchObject({ code: 'IIKO_NOT_CONFIGURED' });
+  });
+
+  it('diagnoseAuth: две стадии auth+menu, без токена и секретов', async () => {
+    // auth (диагностика) + auth (для токена меню) + menu
+    const { client, fetchMock } = createClient([
+      jsonResponse({ token: 'session-key', correlationId: 'corr-auth' }, 200),
+      jsonResponse({ token: 'session-key', correlationId: 'corr-auth-2' }, 200),
+      jsonResponse({ groups: [], correlationId: 'corr-menu' }, 200),
     ]);
     const diag = await client.diagnoseAuth();
 
-    expect(diag.method).toBe('POST');
-    expect(diag.finalUrl).toBe('https://api-ru.iiko.services/api/1/access_token');
     expect(diag.apiLoginConfigured).toBe(true);
     expect(diag.appIdConfigured).toBe(true);
     expect(diag.clientSecretConfigured).toBe(true);
-    expect(diag.upstream.httpStatus).toBe(200);
-    expect(diag.upstream.correlationId).toBe('corr-123');
-    expect(diag.upstream.error).toBeNull();
+    expect(diag.externalMenuIdConfigured).toBe(true);
+    expect(diag.organizationIdConfigured).toBe(true);
+
+    // Стадия auth.
+    expect(diag.auth.finalUrl).toBe('https://api-ru.iiko.services/api/v2/access_token');
+    expect(diag.auth.method).toBe('POST');
+    expect(diag.auth.httpStatus).toBe(200);
+    expect(diag.auth.correlationId).toBe('corr-auth');
+    expect(diag.auth.success).toBe(true);
+    expect(diag.auth.error).toBeNull();
+
+    // Стадия menu.
+    expect(diag.menu).not.toBeNull();
+    expect(diag.menu?.finalUrl).toBe('https://api-ru.iiko.services/api/v2/menu');
+    expect(diag.menu?.httpStatus).toBe(200);
+    expect(diag.menu?.correlationId).toBe('corr-menu');
+    expect(diag.menu?.success).toBe(true);
 
     // Токен и секреты не попадают в диагностику.
     const serialized = JSON.stringify(diag);
@@ -303,12 +354,16 @@ describe('IikoClient', () => {
     expect(serialized).not.toContain('test-app-id');
     expect(serialized).not.toContain('test-client-secret');
 
-    // Тело запроса содержит секреты, но диагностика их не раскрывает.
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
-    expect(String(init.body)).toContain('test-client-secret');
+    // Тело запроса auth содержит секреты, но диагностика их не раскрывает.
+    const authInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(String(authInit.body)).toContain('test-client-secret');
+    // Тело menu содержит externalMenuId и Bearer, но диагностика не раскрывает токен.
+    const menuInit = fetchMock.mock.calls[2]?.[1] as RequestInit;
+    const menuHeaders = menuInit.headers as Record<string, string>;
+    expect(menuHeaders.authorization).toBe('Bearer session-key');
   });
 
-  it('diagnoseAuth фиксирует upstream HTTP-статус и correlationId при ошибке', async () => {
+  it('diagnoseAuth: menu стадия не выполняется при провале auth', async () => {
     const { client } = createClient([
       jsonResponse(
         { errorDescription: 'Invalid credentials', correlationId: 'corr-err-1' },
@@ -317,11 +372,48 @@ describe('IikoClient', () => {
     ]);
     const diag = await client.diagnoseAuth();
 
-    expect(diag.upstream.httpStatus).toBe(401);
-    expect(diag.upstream.correlationId).toBe('corr-err-1');
-    expect(diag.upstream.error).toContain('Invalid credentials');
-    // Не выбрасывает, возвращает безопасный объект.
-    expect(diag.apiLoginConfigured).toBe(true);
+    expect(diag.auth.httpStatus).toBe(401);
+    expect(diag.auth.correlationId).toBe('corr-err-1');
+    expect(diag.auth.success).toBe(false);
+    expect(diag.auth.error).toContain('Invalid credentials');
+    expect(diag.menu).toBeNull();
+  });
+
+  it('diagnoseAuth: ошибка меню не маскируется под IIKO_AUTH_FAILED', async () => {
+    // auth (диагностика) + auth (токен) + menu 404
+    const { client } = createClient([
+      jsonResponse({ token: 'session-key' }, 200),
+      jsonResponse({ token: 'session-key' }, 200),
+      jsonResponse({ errorDescription: 'Menu not found', correlationId: 'corr-menu-err' }, 404),
+    ]);
+    const diag = await client.diagnoseAuth();
+
+    expect(diag.auth.success).toBe(true);
+    expect(diag.menu).not.toBeNull();
+    expect(diag.menu?.httpStatus).toBe(404);
+    expect(diag.menu?.success).toBe(false);
+    expect(diag.menu?.error).toContain('Menu not found');
+    expect(diag.menu?.correlationId).toBe('corr-menu-err');
+    // Auth при этом успешен — ошибка изолирована на стадии menu.
+    expect(diag.auth.error).toBeNull();
+  });
+
+  it('diagnoseAuth: menu не запрашивается без externalMenuId/organizationId', async () => {
+    const { client, fetchMock } = createClient(
+      [jsonResponse({ token: 'session-key' }, 200)],
+      { externalMenuId: undefined, organizationId: undefined },
+    );
+    const diag = await client.diagnoseAuth();
+
+    expect(diag.auth.success).toBe(true);
+    expect(diag.externalMenuIdConfigured).toBe(false);
+    expect(diag.organizationIdConfigured).toBe(false);
+    expect(diag.menu).not.toBeNull();
+    expect(diag.menu?.success).toBe(false);
+    expect(diag.menu?.httpStatus).toBeNull();
+    expect(diag.menu?.error).toMatch(/IIKO_EXTERNAL_MENU_ID/);
+    // Только один запрос — auth (диагностика); токен для меню не запрашивается.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('diagnoseAuth сообщает о незавершённых учётных данных без запроса', async () => {
@@ -329,8 +421,10 @@ describe('IikoClient', () => {
     const diag = await client.diagnoseAuth();
 
     expect(diag.appIdConfigured).toBe(false);
-    expect(diag.upstream.httpStatus).toBeNull();
-    expect(diag.upstream.error).toMatch(/настроены/);
+    expect(diag.auth.httpStatus).toBeNull();
+    expect(diag.auth.error).toMatch(/настроены/);
+    expect(diag.auth.success).toBe(false);
+    expect(diag.menu).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
