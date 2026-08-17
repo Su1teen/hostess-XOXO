@@ -30,6 +30,7 @@ function createClient(
     appId?: string;
     clientSecret?: string;
     authPath?: string;
+    menuPath?: string;
     externalMenuId?: string;
     organizationId?: string;
   } = {},
@@ -44,12 +45,13 @@ function createClient(
   const attempts: IikoAttemptRecord[] = [];
 
   const client = new IikoClient({
-    baseUrl: 'https://api-ru.iiko.services/api/1',
+    baseUrl: 'https://api-ru.iiko.services/api/v2',
     apiKey: 'apiKey' in overrides ? overrides.apiKey : 'test-api-login',
     appId: 'appId' in overrides ? overrides.appId : 'test-app-id',
     clientSecret:
       'clientSecret' in overrides ? overrides.clientSecret : 'test-client-secret',
     authPath: overrides.authPath,
+    menuPath: overrides.menuPath,
     externalMenuId: 'externalMenuId' in overrides ? overrides.externalMenuId : '88042',
     organizationId:
       'organizationId' in overrides
@@ -272,12 +274,32 @@ describe('IikoClient', () => {
 
   it('использует IIKO_AUTH_PATH для построения URL авторизации', async () => {
     const { client, fetchMock } = createClient([jsonResponse({ token: 't' })], {
-      authPath: '/api/v2/access_token',
+      authPath: '/access_token',
     });
     await client.getAccessToken();
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
       'https://api-ru.iiko.services/api/v2/access_token',
     );
+  });
+
+  it('не дублирует /api/v2 при построении URL авторизации', async () => {
+    const { client, fetchMock } = createClient([jsonResponse({ token: 't' })]);
+    await client.getAccessToken();
+    const authUrl = String(fetchMock.mock.calls[0]?.[0]);
+    expect(authUrl.match(/\/api\/v2/g)?.length).toBe(1);
+    expect(authUrl).not.toContain('/api/v2/api/v2');
+  });
+
+  it('строит URL меню из IIKO_MENU_PATH без дублирования', async () => {
+    const { client, fetchMock } = createClient([
+      jsonResponse({ token: 't' }),
+      jsonResponse({ groups: [] }),
+    ]);
+    await client.getExternalMenuOrMenu('cc9baa8d-cfac-4092-9c97-477746fe84e2');
+    const menuUrl = String(fetchMock.mock.calls[1]?.[0]);
+    expect(menuUrl).toBe('https://api-ru.iiko.services/api/v2/menu');
+    expect(menuUrl.match(/\/api\/v2/g)?.length).toBe(1);
+    expect(menuUrl).not.toContain('/api/v2/api/v2');
   });
 
   it('isConfigured требует apiLogin, appId и clientSecret', async () => {

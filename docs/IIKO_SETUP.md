@@ -13,11 +13,12 @@ v0.1 использует iiko Cloud **только для чтения**. Ни�
 ## 2. Переменные окружения
 
 ```env
-IIKO_API_BASE_URL=https://api-ru.iiko.services/api/1
+IIKO_API_BASE_URL=https://api-ru.iiko.services/api/v2
 IIKO_API_KEY=<apiLogin>
 IIKO_APP_ID=<appId>
 IIKO_CLIENT_SECRET=<clientSecret>
-IIKO_AUTH_PATH=/api/v2/access_token
+IIKO_AUTH_PATH=/access_token
+IIKO_MENU_PATH=/menu
 IIKO_AUTH_RETURN_ADDITIONAL_INFO=false
 IIKO_AUTH_INCLUDE_DISABLED=false
 IIKO_ORGANIZATION_ID=<uuid, опционально>
@@ -32,8 +33,11 @@ IIKO_DEBUG_RAW_PAYLOADS=false
   `IIKO_NOT_CONFIGURED`) — удобный безопасный режим для демо и разработки.
 - `IIKO_DEBUG_RAW_PAYLOADS=true` включает логирование payload-ов **с редакцией**; включайте
   только на время диагностики.
-- Авторизация и меню используют iiko Cloud API **v2**: `POST /api/v2/access_token` и
-  `POST /api/v2/menu`. Токен живёт только в памяти процесса.
+- `IIKO_API_BASE_URL` указывает на корень v2 (`/api/v2`). Пути `IIKO_AUTH_PATH` и
+  `IIKO_MENU_PATH` задаются относительно базы, поэтому итоговые URL:
+  auth = `https://api-ru.iiko.services/api/v2/access_token`,
+  menu = `https://api-ru.iiko.services/api/v2/menu`.
+- Авторизация использует `apiLogin` (не `apiKey`). Токен живёт только в памяти процесса.
 
 ## 3. Используемые эндпоинты (все read-only)
 

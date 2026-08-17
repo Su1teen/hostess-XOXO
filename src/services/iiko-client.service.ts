@@ -22,8 +22,10 @@ export interface IikoClientOptions {
   apiKey?: string;
   appId?: string;
   clientSecret?: string;
-  /** Путь авторизации относительно корня API, по умолчанию /api/v2/access_token. */
+  /** Путь авторизации относительно baseUrl, по умолчанию /access_token. */
   authPath?: string;
+  /** Путь запроса меню относительно baseUrl, по умолчанию /menu. */
+  menuPath?: string;
   authReturnAdditionalInfo?: boolean;
   authIncludeDisabled?: boolean;
   /** Внешнее меню iiko (externalMenuId) для запроса /api/v2/menu. */
@@ -155,10 +157,14 @@ export class IikoClient {
     IikoClientOptions;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
-  private readonly rootUrl: string;
+  /** Корень API без версии: https://api-ru.iiko.services — для legacy v1 endpoints. */
+  private readonly apiRoot: string;
+  /** База v2: https://api-ru.iiko.services/api/v2 — для auth и menu. */
+  private readonly v2Base: string;
   private readonly authUrl: string;
   private readonly menuUrl: string;
   private readonly authPath: string;
+  private readonly menuPath: string;
   private tokenState: TokenState | null = null;
   private inflightToken: Promise<string> | null = null;
 
@@ -166,13 +172,15 @@ export class IikoClient {
     this.options = options;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.now = options.now ?? (() => Date.now());
-    this.rootUrl = normalizeRootUrl(options.baseUrl);
-    this.authPath = normalizeAuthPath(options.authPath ?? '/api/v2/access_token');
-    // authUrl строится от нормализованного корня (без /api/1), поэтому
-    // IIKO_API_BASE_URL=https://api-ru.iiko.services/api/1 + IIKO_AUTH_PATH=/api/v2/access_token
-    // => https://api-ru.iiko.services/api/v2/access_token (без дублирования /api/1).
-    this.authUrl = buildAuthUrl(this.rootUrl, this.authPath);
-    this.menuUrl = `${this.rootUrl}/api/v2/menu`;
+    // IIKO_API_BASE_URL=https://api-ru.iiko.services/api/v2
+    //   v2Base  = https://api-ru.iiko.services/api/v2  (для auth/menu)
+    //   apiRoot = https://api-ru.iiko.services          (для legacy v1 endpoints)
+    this.v2Base = normalizeV2Base(options.baseUrl);
+    this.apiRoot = stripApiVersion(this.v2Base);
+    this.authPath = normalizeAuthPath(options.authPath ?? '/access_token');
+    this.menuPath = normalizeMenuPath(options.menuPath ?? '/menu');
+    this.authUrl = `${this.v2Base}${this.authPath}`;
+    this.menuUrl = `${this.v2Base}${this.menuPath}`;
   }
 
   get isConfigured(): boolean {
@@ -266,7 +274,7 @@ export class IikoClient {
   }
 
   /**
-   * Внешнее меню iiko (API v2): POST /api/v2/menu.
+   * Внешнее меню iiko (API v2): POST {menuUrl}.
    * Тело: { externalMenuId, organizationIds: [organizationId] }.
    * Токен получается автоматически и кэшируется только в памяти.
    */
@@ -279,10 +287,11 @@ export class IikoClient {
       throw iikoNotConfigured();
     }
     const { body } = await this.authorizedRequest<unknown>(
-      '/api/v2/menu',
+      this.menuUrl,
       { externalMenuId: menuId, organizationIds: [organizationId] },
       'menu_v2',
       organizationId,
+      true,
     );
     return body;
   }
@@ -557,11 +566,17 @@ export class IikoClient {
     payload: Record<string, unknown>,
     operation: string,
     organizationId?: string,
+    absoluteUrl = false,
   ): Promise<{ body: T; httpStatus: number }> {
     this.ensureConfigured();
     const token = await this.getAccessToken();
     try {
-      return await this.rawRequest<T>(path, payload, { operation, token, organizationId });
+      return await this.rawRequest<T>(path, payload, {
+        operation,
+        token,
+        organizationId,
+        absoluteUrl,
+      });
     } catch (error) {
       // Единственный безопасный retry на 4xx: устаревший session key.
       if (isUnauthorizedIikoError(error)) {
@@ -571,6 +586,7 @@ export class IikoClient {
           operation,
           token: refreshed,
           organizationId,
+          absoluteUrl,
         });
       }
       throw error;
@@ -590,7 +606,7 @@ export class IikoClient {
   ): Promise<{ body: T; httpStatus: number }> {
     const maxRetries = this.options.maxRetries ?? 2;
     const retryDelayMs = this.options.retryDelayMs ?? 250;
-    const url = context.absoluteUrl ? path : `${this.rootUrl}${path}`;
+    const url = context.absoluteUrl ? path : `${this.apiRoot}${path}`;
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
@@ -723,30 +739,37 @@ export class IikoClient {
   }
 }
 
-function normalizeRootUrl(baseUrl: string): string {
-  // IIKO_API_BASE_URL исторически содержит /api/1; клиент сам выбирает версию пути.
-  return baseUrl.replace(/\/+$/, '').replace(/\/api\/\d+$/, '');
+/**
+ * Нормализует базу v2: убирает trailing slash.
+ * IIKO_API_BASE_URL=https://api-ru.iiko.services/api/v2 => https://api-ru.iiko.services/api/v2
+ */
+function normalizeV2Base(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, '');
 }
 
-/** Гарантирует, что путь авторизации начинается с / и не имеет trailing slash. */
+/**
+ * Убирает суффикс /api/<version> из v2Base, возвращая корень API.
+ * https://api-ru.iiko.services/api/v2 => https://api-ru.iiko.services
+ * https://api-ru.iiko.services/api/1  => https://api-ru.iiko.services
+ * Используется только для legacy v1 endpoints (organizations, nomenclature и т.д.),
+ * которые не являются частью активной v2-интеграции auth+menu.
+ */
+function stripApiVersion(v2Base: string): string {
+  return v2Base.replace(/\/api\/v?\d+$/, '');
+}
+
+/** Гарантирует, что путь начинается с / и не имеет trailing slash. */
 function normalizeAuthPath(path: string): string {
   const trimmed = path.trim();
   const withSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
   return withSlash.replace(/\/+$/, '') || '/';
 }
 
-/**
- * Безопасно собирает итоговый URL авторизации из нормализованного корня и authPath.
- * rootUrl = https://api-ru.iiko.services (без /api/1) + IIKO_AUTH_PATH=/api/v2/access_token
- * => https://api-ru.iiko.services/api/v2/access_token
- *
- * Не дублирует /api/1: корень уже очищен от версии, а путь авторизации
- * содержит свою версию (/api/v2/...).
- */
-function buildAuthUrl(rootUrl: string, authPath: string): string {
-  const normalizedBase = rootUrl.replace(/\/+$/, '');
-  const normalizedPath = normalizeAuthPath(authPath);
-  return `${normalizedBase}${normalizedPath}`;
+/** Гарантирует, что путь меню начинается с / и не имеет trailing slash. */
+function normalizeMenuPath(path: string): string {
+  const trimmed = path.trim();
+  const withSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return withSlash.replace(/\/+$/, '') || '/';
 }
 
 function safeJsonParse(text: string): unknown {

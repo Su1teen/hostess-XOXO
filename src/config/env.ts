@@ -44,11 +44,12 @@ export const envSchema = z
 
     CORS_ORIGINS: csvList,
 
-    IIKO_API_BASE_URL: z.string().url().default('https://api-ru.iiko.services/api/1'),
+    IIKO_API_BASE_URL: z.string().url().default('https://api-ru.iiko.services/api/v2'),
     IIKO_API_KEY: optionalString,
     IIKO_APP_ID: optionalString,
     IIKO_CLIENT_SECRET: optionalString,
-    IIKO_AUTH_PATH: z.string().default('/api/v2/access_token'),
+    IIKO_AUTH_PATH: z.string().default('/access_token'),
+    IIKO_MENU_PATH: z.string().default('/menu'),
     IIKO_AUTH_RETURN_ADDITIONAL_INFO: booleanFromString,
     IIKO_AUTH_INCLUDE_DISABLED: booleanFromString,
     IIKO_ORGANIZATION_ID: optionalString,

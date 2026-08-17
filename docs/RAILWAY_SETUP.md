@@ -58,11 +58,12 @@ APP_TIMEZONE=Asia/Almaty
 Переменные iiko для Railway:
 
 ```env
-IIKO_API_BASE_URL=https://api-ru.iiko.services/api/1
+IIKO_API_BASE_URL=https://api-ru.iiko.services/api/v2
 IIKO_API_KEY=<apiLogin>
 IIKO_APP_ID=<appId>
 IIKO_CLIENT_SECRET=<clientSecret>
-IIKO_AUTH_PATH=/api/v2/access_token
+IIKO_AUTH_PATH=/access_token
+IIKO_MENU_PATH=/menu
 IIKO_AUTH_RETURN_ADDITIONAL_INFO=false
 IIKO_AUTH_INCLUDE_DISABLED=false
 IIKO_ORGANIZATION_ID=<organizationId>
@@ -70,16 +71,18 @@ IIKO_EXTERNAL_MENU_ID=<externalMenuId>
 IIKO_SYNC_ENABLED=true
 ```
 
-`IIKO_API_BASE_URL` исторически содержит `/api/1`, но клиент строит итоговые URL
-от нормализованного корня, поэтому `/api/1` не дублируется: итоговый URL авторизации
-= `https://api-ru.iiko.services/api/v2/access_token`, меню =
-`https://api-ru.iiko.services/api/v2/menu`.
+`IIKO_API_BASE_URL` указывает на корень v2 (`/api/v2`). Пути `IIKO_AUTH_PATH`
+и `IIKO_MENU_PATH` задаются относительно базы, поэтому итоговые URL собираются
+без дублирования версии:
+
+- auth: `https://api-ru.iiko.services/api/v2/access_token`
+- menu: `https://api-ru.iiko.services/api/v2/menu`
 
 Двухстадийная диагностика (auth + menu) доступна на
 `GET /api/v1/admin/iiko/auth-diagnostics` и в админ-панели (/admin). Эндпоинт
-возвращает upstream HTTP-статус и `correlationId` для каждой стадии, но никогда
-не раскрывает секреты, токен или тело запроса. Ошибки меню отмечаются отдельно и
-не маскируются под `IIKO_AUTH_FAILED`.
+возвращает итоговые URL, метод, upstream HTTP-статус и `correlationId` для каждой
+стадии, но никогда не раскрывает секреты, apiLogin, токен или тело запроса.
+Ошибки меню отмечаются отдельно и не маскируются под `IIKO_AUTH_FAILED`.
 
 Рекомендации:
 
