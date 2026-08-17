@@ -292,6 +292,7 @@ describe('IikoClient endpoints', () => {
     );
     const init = fetchMock.mock.calls[1]?.[1] as RequestInit;
     expect(init.method).toBe('POST');
+    expect(Object.keys(init).sort()).toEqual(['body', 'headers', 'method']);
     expect(JSON.parse(String(init.body))).toEqual({
       externalMenuId: '88042',
       organizationIds: [ORG_ID],
@@ -442,23 +443,46 @@ describe('IikoClient endpoints', () => {
     expect(diagnostics).toMatchObject({
       finalUrl: 'https://api-ru.iiko.services/api/2/menu/by_id',
       method: 'POST',
-      authorizationScheme: 'Bearer',
-      accessTokenPresent: true,
-      accessTokenLength: 'session-key'.length,
-      externalMenuIdPresent: true,
+      bodyKeys: ['externalMenuId', 'organizationIds'],
       externalMenuIdType: 'string',
       organizationIdsType: 'array',
       organizationIdsCount: 1,
-      firstOrganizationIdLooksLikeUuid: true,
-      headersPresent: ['authorization', 'content-type', 'accept'],
-      lastUpstreamStatus: 200,
-      lastCorrelationId: 'menu-corr',
-      safeUpstreamError: null,
+      tokenPresent: true,
+      tokenLength: 'session-key'.length,
+      authorizationScheme: 'Bearer',
+      upstreamStatus: 200,
+      upstreamContentType: 'application/json',
+      correlationId: 'menu-corr',
+      responseText: '{"itemCategories":[],"correlationId":"menu-corr"}',
+      errorKind: null,
     });
     const serialized = JSON.stringify(diagnostics);
     expect(serialized).not.toContain('session-key');
     expect(serialized).not.toContain('test-api-login');
     expect(serialized).not.toContain('test-client-secret');
+  });
+
+  it('menu-test diagnostics редактирует секреты и обрезает response text до 1000 символов', async () => {
+    const upstreamBody = JSON.stringify({
+      message: 'test-client-secret',
+      padding: 'x'.repeat(1200),
+      correlationId: 'safe-corr',
+    });
+    const { client } = createClient([
+      jsonResponse({ token: 'session-key' }),
+      new Response(upstreamBody, {
+        status: 400,
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+      }),
+    ]);
+
+    const diagnostics = await client.diagnoseMenuRequest();
+    expect(diagnostics.upstreamStatus).toBe(400);
+    expect(diagnostics.upstreamContentType).toBe('application/json; charset=utf-8');
+    expect(diagnostics.correlationId).toBe('safe-corr');
+    expect(diagnostics.responseText?.length).toBeLessThanOrEqual(1000);
+    expect(diagnostics.responseText).not.toContain('test-client-secret');
+    expect(JSON.stringify(diagnostics)).not.toContain('session-key');
   });
 
   it('menu failure сохраняет upstream status, correlationId и безопасную ошибку', async () => {
@@ -475,8 +499,44 @@ describe('IikoClient endpoints', () => {
       details: {
         upstreamStatus: 400,
         correlationId: 'failure-corr',
-        safeUpstreamError: 'External menu rejected',
+        safeUpstreamError:
+          '{"errorDescription":"External menu rejected","correlationId":"failure-corr"}',
       },
+    });
+  });
+
+  it('отличает network error от upstream HTTP error', async () => {
+    const { client } = createClient([
+      jsonResponse({ token: 't' }),
+      new Error('fetch failed'),
+    ]);
+    await expect(client.getExternalMenu(ORG_ID)).rejects.toMatchObject({
+      code: 'IIKO_MENU_NETWORK_ERROR',
+      details: { kind: 'NETWORK_ERROR' },
+    });
+  });
+
+  it('отличает timeout от network error', async () => {
+    const timeout = new Error('request timed out');
+    timeout.name = 'TimeoutError';
+    const { client } = createClient([jsonResponse({ token: 't' }), timeout]);
+    await expect(client.getExternalMenu(ORG_ID)).rejects.toMatchObject({
+      code: 'IIKO_MENU_TIMEOUT',
+      details: { kind: 'TIMEOUT' },
+    });
+  });
+
+  it('отличает HTTP 200 с не-JSON body от transport error', async () => {
+    const { client } = createClient([
+      jsonResponse({ token: 't' }),
+      new Response('<html>not json</html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      }),
+    ]);
+    await expect(client.getExternalMenu(ORG_ID)).rejects.toMatchObject({
+      code: 'IIKO_MENU_JSON_PARSE_FAILED',
+      details: { kind: 'JSON_PARSE_ERROR', upstreamStatus: 200 },
     });
   });
 });

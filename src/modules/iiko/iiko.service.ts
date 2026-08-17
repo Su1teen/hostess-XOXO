@@ -1,6 +1,12 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
 import type { AppEnv } from '../../config/env.js';
-import { notFound, organizationNotSelected, validationError } from '../../lib/errors.js';
+import {
+  iikoMenuDatabaseFailed,
+  iikoMenuParserFailed,
+  notFound,
+  organizationNotSelected,
+  validationError,
+} from '../../lib/errors.js';
 import { toMoney } from '../../lib/money.js';
 import type { AuditService } from '../../services/audit.service.js';
 import type { IikoClient } from '../../services/iiko-client.service.js';
@@ -211,12 +217,18 @@ export class IikoSyncService {
       throw error;
     }
 
-    const parsed = parseExternalMenu(rawMenu, {
-      organizationId: organization.iikoOrganizationId,
-      externalMenuId,
-      currency: 'KZT',
-    });
+    let parsed: ReturnType<typeof parseExternalMenu>;
+    try {
+      parsed = parseExternalMenu(rawMenu, {
+        organizationId: organization.iikoOrganizationId,
+        externalMenuId,
+        currency: 'KZT',
+      });
+    } catch {
+      throw iikoMenuParserFailed('Получено меню HTTP 2xx, но внутренняя нормализация завершилась ошибкой.');
+    }
 
+    try {
     const syncedAt = new Date();
     const seenKeys = new Set<string>();
     let savedCount = 0;
@@ -354,6 +366,11 @@ export class IikoSyncService {
 
     await this.recordSyncSummary(organization.id, summary, requestId);
     return summary;
+    } catch {
+      throw iikoMenuDatabaseFailed(
+        'Меню получено и разобрано, но сохранение нормализованных товаров завершилось ошибкой.',
+      );
+    }
   }
 
   private buildFailureSummary(

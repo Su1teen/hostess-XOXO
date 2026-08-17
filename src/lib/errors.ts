@@ -9,6 +9,11 @@ export const ERROR_CODES = [
   'IIKO_AUTH_FAILED',
   'IIKO_REQUEST_FAILED',
   'IIKO_MENU_REQUEST_FAILED',
+  'IIKO_MENU_NETWORK_ERROR',
+  'IIKO_MENU_TIMEOUT',
+  'IIKO_MENU_JSON_PARSE_FAILED',
+  'IIKO_MENU_PARSER_FAILED',
+  'IIKO_MENU_DATABASE_FAILED',
   'IIKO_ORGANIZATION_NOT_SELECTED',
   'NO_EXCHANGE_PRODUCTS_SELECTED',
   'INVALID_ROUND_TRANSITION',
@@ -108,6 +113,35 @@ export const iikoMenuRequestFailed = (details: {
     },
     true,
   );
+
+export const iikoMenuNetworkError = (safeMessage: string) =>
+  new AppError('IIKO_MENU_NETWORK_ERROR', safeMessage, 502, { kind: 'NETWORK_ERROR' }, true);
+
+export const iikoMenuTimeout = (safeMessage: string) =>
+  new AppError('IIKO_MENU_TIMEOUT', safeMessage, 504, { kind: 'TIMEOUT' }, true);
+
+export const iikoMenuJsonParseFailed = (details: {
+  upstreamStatus: number;
+  correlationId?: string | null;
+  safeMessage: string;
+}) =>
+  new AppError(
+    'IIKO_MENU_JSON_PARSE_FAILED',
+    details.safeMessage,
+    502,
+    {
+      kind: 'JSON_PARSE_ERROR',
+      upstreamStatus: details.upstreamStatus,
+      correlationId: details.correlationId ?? null,
+    },
+    true,
+  );
+
+export const iikoMenuParserFailed = (safeMessage: string) =>
+  new AppError('IIKO_MENU_PARSER_FAILED', safeMessage, 500, { kind: 'PARSER_ERROR' }, true);
+
+export const iikoMenuDatabaseFailed = (safeMessage: string) =>
+  new AppError('IIKO_MENU_DATABASE_FAILED', safeMessage, 500, { kind: 'DATABASE_ERROR' }, true);
 
 export const organizationNotSelected = () =>
   new AppError(

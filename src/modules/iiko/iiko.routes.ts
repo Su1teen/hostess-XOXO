@@ -114,6 +114,22 @@ export async function iikoRoutes(app: FastifyInstance): Promise<void> {
     async (request) => app.services.iikoSync.syncMenu(request.id),
   );
 
+  app.post(
+    `${API_PREFIX}/admin/iiko/menu-test`,
+    {
+      preHandler: app.requireAdmin,
+      schema: {
+        tags: ['iiko'],
+        summary: 'Временно проверить точный read-only запрос POST /api/2/menu/by_id',
+        description:
+          'Получает свежий token и возвращает только безопасные параметры запроса, upstream status, ' +
+          'content-type, correlationId и отредактированный response text (до 1000 символов).',
+        security: [{ adminApiKey: [] }],
+      },
+    },
+    async () => app.services.iikoClient.diagnoseMenuRequest(),
+  );
+
   app.get(
     `${API_PREFIX}/admin/iiko/menu-request-diagnostics`,
     {
@@ -123,7 +139,7 @@ export async function iikoRoutes(app: FastifyInstance): Promise<void> {
         summary: 'Безопасная диагностика фактического POST /api/2/menu/by_id',
         description:
           'Получает свежий auth token, выполняет read-only запрос полного меню и возвращает только ' +
-          'безопасные fingerprints. Токен, Authorization и сырое меню не возвращаются.',
+          'безопасные fingerprints и отредактированный response text (до 1000 символов).',
         security: [{ adminApiKey: [] }],
       },
     },
