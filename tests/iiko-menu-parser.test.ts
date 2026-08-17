@@ -155,9 +155,9 @@ describe('parseExternalMenu /api/2/menu/by_id', () => {
     expect(result.skippedHidden).toBe(1);
   });
 
-  it('пропускает цену, принадлежащую другой организации', () => {
+  it('импортирует положительную цену независимо от organization metadata', () => {
     const result = parseExternalMenu(fixtureMenu, { organizationId: ORG_ID });
-    expect(result.variants.some((v) => v.iikoItemId === 'item-other-org')).toBe(false);
+    expect(result.variants.some((v) => v.iikoItemId === 'item-other-org')).toBe(true);
   });
 
   it('пропускает malformed цену', () => {
@@ -166,10 +166,11 @@ describe('parseExternalMenu /api/2/menu/by_id', () => {
     expect(result.skippedMalformedPrice).toBeGreaterThanOrEqual(1);
   });
 
-  it('пропускает неоднозначную цену (две positive generic) без max-price collapse', () => {
+  it('берёт первую положительную цену без ambiguity logic', () => {
     const result = parseExternalMenu(fixtureMenu, { organizationId: ORG_ID });
-    expect(result.variants.some((v) => v.iikoItemId === 'item-ambiguous')).toBe(false);
-    expect(result.skippedAmbiguousPrice).toBe(1);
+    const variant = result.variants.find((v) => v.iikoItemId === 'item-ambiguous');
+    expect(variant?.basePrice).toBe(100);
+    expect(result.skippedAmbiguousPrice).toBe(0);
   });
 
   it('сохраняет correlationId и source ids', () => {
@@ -291,7 +292,7 @@ describe('normalizePositivePrice', () => {
     expect(normalizePositivePrice('')).toBeNull();
     expect(normalizePositivePrice(null)).toBeNull();
     expect(normalizePositivePrice(undefined)).toBeNull();
-    expect(normalizePositivePrice(true)).toBeNull();
+    expect(normalizePositivePrice(true)).toBe(1);
     expect(normalizePositivePrice({})).toBeNull();
   });
 });
@@ -386,7 +387,7 @@ describe('parseExternalMenu price normalization (real iiko shapes)', () => {
     expect(result.variants[0]?.basePrice).toBe(2500);
   });
 
-  it('парсит цену из price.currentPrice (v1 nomenclature shape)', () => {
+  it('парсит цену из priceRecord.currentPrice', () => {
     const menu = {
       itemCategories: [
         {
@@ -397,9 +398,7 @@ describe('parseExternalMenu price normalization (real iiko shapes)', () => {
               itemSizes: [
                 {
                   id: 's1',
-                  prices: [
-                    { price: { currentPrice: 1800, isIncludedInMenu: true } },
-                  ],
+                  prices: [{ currentPrice: 1800, isIncludedInMenu: true }],
                 },
               ],
             },
@@ -555,7 +554,7 @@ describe('parseExternalMenu price normalization (real iiko shapes)', () => {
     expect(result.skippedMalformedPrice).toBe(1);
   });
 
-  it('выбирает organization-specific цену по organizationId (single string)', () => {
+  it('не требует organizationId и выбирает первую положительную цену', () => {
     const menu = {
       itemCategories: [
         {
@@ -579,10 +578,10 @@ describe('parseExternalMenu price normalization (real iiko shapes)', () => {
     };
     const result = parseExternalMenu(menu, { organizationId: ORG_ID });
     expect(result.variants).toHaveLength(1);
-    expect(result.variants[0]?.basePrice).toBe(1200);
+    expect(result.variants[0]?.basePrice).toBe(1000);
   });
 
-  it('выбирает organization-specific цену по organizations (array)', () => {
+  it('не требует organizations и выбирает первую положительную цену', () => {
     const menu = {
       itemCategories: [
         {
@@ -606,10 +605,10 @@ describe('parseExternalMenu price normalization (real iiko shapes)', () => {
     };
     const result = parseExternalMenu(menu, { organizationId: ORG_ID });
     expect(result.variants).toHaveLength(1);
-    expect(result.variants[0]?.basePrice).toBe(1200);
+    expect(result.variants[0]?.basePrice).toBe(1000);
   });
 
-  it('диагностика содержит safe field names/types без секретов', () => {
+  it('диагностика содержит safe real sample без секретов', () => {
     const menu = {
       itemCategories: [
         {
@@ -621,7 +620,14 @@ describe('parseExternalMenu price normalization (real iiko shapes)', () => {
                 {
                   id: 's1',
                   name: 'Sample Size',
-                  prices: [{ price: '2500', organizationId: ORG_ID }],
+                  prices: [
+                    {
+                      price: '2500',
+                      organizationId: ORG_ID,
+                      token: 'must-not-leak',
+                      nested: { clientSecret: 'must-not-leak' },
+                    },
+                  ],
                 },
               ],
             },
@@ -630,19 +636,86 @@ describe('parseExternalMenu price normalization (real iiko shapes)', () => {
       ],
     };
     const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.diagnostic).not.toBeNull();
-    expect(result.diagnostic?.firstItemName).toBe('Sample Item');
-    expect(result.diagnostic?.firstSizeName).toBe('Sample Size');
-    expect(result.diagnostic?.pricesArrayLength).toBe(1);
-    expect(result.diagnostic?.priceValueType).toBe('string');
-    expect(result.diagnostic?.priceObjectKeys).toContain('price');
-    expect(result.diagnostic?.priceObjectKeys).toContain('organizationId');
-    expect(result.diagnostic?.validPositivePriceCount).toBe(1);
-    // Диагностика не должна содержать секреты.
-    const serialized = JSON.stringify(result.diagnostic);
-    expect(serialized).not.toContain('apiLogin');
+    expect(result.parserSamples).toHaveLength(1);
+    const sample = result.parserSamples[0];
+    expect(sample?.itemName).toBe('Sample Item');
+    expect(sample?.sizeName).toBe('Sample Size');
+    expect(sample?.pricesIsArray).toBe(true);
+    expect(sample?.pricesLength).toBe(1);
+    expect(sample?.priceValue).toBe('2500');
+    expect(sample?.priceValueType).toBe('string');
+    expect(sample?.javascriptNumberConversion).toBe(2500);
+    expect(sample?.positiveByPostmanRule).toBe(true);
+    expect(sample?.selectedPriceField).toBe('price');
+    expect(sample?.coercedPositivePrice).toBe(2500);
+    expect(sample?.firstPriceKeys).toContain('price');
+    expect(sample?.firstPriceKeys).not.toContain('token');
+    const serialized = JSON.stringify(result.parserSamples);
+    expect(serialized).not.toContain('must-not-leak');
     expect(serialized).not.toContain('clientSecret');
     expect(serialized).not.toContain('token');
+  });
+
+  it('парсит primitive price record', () => {
+    const menu = {
+      itemCategories: [
+        {
+          items: [
+            {
+              id: 'item-primitive',
+              name: 'Primitive',
+              itemSizes: [{ id: 's1', prices: ['750'] }],
+            },
+          ],
+        },
+      ],
+    };
+    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
+    expect(result.variants[0]?.basePrice).toBe(750);
+    expect(result.parserSamples[0]?.selectedPriceField).toBe('primitive');
+  });
+
+  it('игнорирует дополнительные поля и не требует organization metadata', () => {
+    const menu = {
+      itemCategories: [
+        {
+          items: [
+            {
+              id: 'item-loose',
+              name: 'Loose',
+              itemSizes: [
+                {
+                  id: 's1',
+                  prices: [{ price: '875', unrelated: { any: 'value' }, enabled: false }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
+    expect(result.variants[0]?.basePrice).toBe(875);
+    expect(result.variants[0]?.syncWarnings).toEqual([]);
+  });
+
+  it('различает zero и malformed counters, ambiguity всегда 0', () => {
+    const menu = {
+      itemCategories: [
+        {
+          items: [
+            { id: 'zero', name: 'Zero', itemSizes: [{ id: 's1', prices: [{ price: 0 }, -2] }] },
+            { id: 'null', name: 'Null', itemSizes: [{ id: 's1', prices: [{ price: null }] }] },
+            { id: 'bad', name: 'Bad', itemSizes: [{ id: 's1', prices: [{ price: 'bad' }] }] },
+          ],
+        },
+      ],
+    };
+    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
+    expect(result.variants).toHaveLength(0);
+    expect(result.skippedZeroPrice).toBe(1);
+    expect(result.skippedMalformedPrice).toBe(2);
+    expect(result.skippedAmbiguousPrice).toBe(0);
   });
 
   it('1107-подобный сценарий: все string цены теперь парсятся, 0 malformed', () => {

@@ -13,15 +13,13 @@
  * Извлекает sellable item-size-price variants:
  *   - товар не hidden/disabled/archived (когда флаги есть);
  *   - товар имеет itemSizes;
- *   - размер имеет хотя бы одну валидную числовую цену > 0;
- *   - если у price есть organizations, список должен содержать organizationId;
+ *   - размер имеет хотя бы одну безопасно преобразуемую цену > 0;
+ *   - organization metadata и дополнительные поля price record не влияют на импорт;
  *   - null/0/отрицательные/NaN/мусорные цены игнорируются.
  *
- * Каждый item + size + валидная цена = отдельная нормализованная строка-вариант.
+ * Каждый item + size с положительной ценой = отдельная нормализованная строка-вариант.
  * Max-price collapse НЕ используется: товар с размерами 0.3L и 0.5L = две строки.
- * Если у размера несколько положительных цен и нельзя однозначно выбрать
- * (нет организации-матча и цен больше одной) — размер пропускается с warning,
- * без произвольного выбора max price.
+ * Для размера выбирается первая положительная цена в порядке полей initial import.
  */
 
 export interface ParsedMenuVariant {
@@ -60,24 +58,27 @@ export interface ParsedMenuResult {
   skippedAmbiguousPrice: number;
   warnings: string[];
   /**
-   * Безопасная диагностика первого item+size для разработки.
-   * Никогда не содержит API key, token, client secret или полное меню.
-   * Содержит только имена полей и типы — не значения.
+   * Безопасные реальные samples не более чем для трёх item+size.
+   * Никогда не содержат API key, token, client secret или полное меню.
    */
-  diagnostic: ParserDiagnostic | null;
+  parserSamples: ParserSample[];
 }
 
-/**
- * Безопасная диагностика парсера для одного sample item+size.
- * Только имена/типы — никогда не значения секретов или сырого тела.
- */
-export interface ParserDiagnostic {
-  firstItemName: string | null;
-  firstSizeName: string | null;
-  pricesArrayLength: number;
-  priceValueType: 'number' | 'string' | 'boolean' | 'object' | 'undefined' | 'null' | null;
-  priceObjectKeys: string[];
-  validPositivePriceCount: number;
+export interface ParserSample {
+  itemName: string;
+  itemKeys: string[];
+  sizeName: string | null;
+  sizeKeys: string[];
+  pricesIsArray: boolean;
+  pricesLength: number;
+  firstPriceRaw: unknown;
+  firstPriceKeys: string[];
+  priceValue: unknown;
+  priceValueType: 'number' | 'string' | 'boolean' | 'object' | 'undefined' | 'null';
+  javascriptNumberConversion: number | null;
+  positiveByPostmanRule: boolean;
+  selectedPriceField: 'price' | 'currentPrice' | 'amount' | 'value' | 'primitive' | null;
+  coercedPositivePrice: number | null;
 }
 
 const NO_SIZE_FALLBACK = '__no_size__';
@@ -147,16 +148,15 @@ export function parseExternalMenu(
   let skippedHidden = 0;
   let skippedZeroPrice = 0;
   let skippedMalformedPrice = 0;
-  let skippedAmbiguousPrice = 0;
+  const skippedAmbiguousPrice = 0;
   const variants: ParsedMenuVariant[] = [];
   const currency = options.currency ?? 'KZT';
-  let diagnostic: ParserDiagnostic | null = null;
+  const parserSamples: ParserSample[] = [];
 
   for (const itemRaw of items) {
     const item = asRecord(itemRaw);
     const itemId = optionalString(item?.id) ?? optionalString(item?.productId);
     if (!itemId) {
-      skippedMalformedPrice += 1;
       continue;
     }
 
@@ -207,18 +207,16 @@ export function parseExternalMenu(
         null;
       const sizeCode = optionalString(sizeRaw?.sizeCode) ?? optionalString(sizeRaw?.code) ?? null;
 
-      const prices = asArray(sizeRaw?.prices);
-      if (prices.length === 0) {
-        skippedZeroPrice += 1;
-        continue;
+      const pricesRaw = sizeRaw?.prices;
+      const prices = asArray(pricesRaw);
+      const chosen = chooseFirstPositivePrice(prices);
+
+      if (parserSamples.length < 3) {
+        parserSamples.push(
+          buildParserSample(item ?? {}, itemName, sizeRaw ?? {}, sizeName, pricesRaw, chosen),
+        );
       }
 
-      // Собираем safe-диагностику для первого item+size с prices.
-      if (!diagnostic) {
-        diagnostic = buildParserDiagnostic(itemName, sizeName, prices);
-      }
-
-      const chosen = choosePrice(prices, options.organizationId, warnings, itemId, sizeId);
       if (chosen.kind === 'zero') {
         skippedZeroPrice += 1;
         continue;
@@ -227,16 +225,9 @@ export function parseExternalMenu(
         skippedMalformedPrice += 1;
         continue;
       }
-      if (chosen.kind === 'ambiguous') {
-        skippedAmbiguousPrice += 1;
-        continue;
-      }
 
       const displayName = buildDisplayName(itemName, sizeName);
       const variantWarnings: string[] = [];
-      if (!chosen.orgMatched) {
-        variantWarnings.push('price_organization_match_unavailable');
-      }
 
       variants.push({
         organizationId: options.organizationId,
@@ -276,91 +267,42 @@ export function parseExternalMenu(
     skippedMalformedPrice,
     skippedAmbiguousPrice,
     warnings,
-    diagnostic,
+    parserSamples,
   };
 }
 
+type PriceField = 'price' | 'currentPrice' | 'amount' | 'value' | 'primitive';
 type PriceChoice =
-  | { kind: 'ok'; price: number; orgMatched: boolean }
-  | { kind: 'zero' }
-  | { kind: 'malformed' }
-  | { kind: 'ambiguous' };
+  | { kind: 'ok'; price: number; field: PriceField }
+  | { kind: 'zero'; field: null }
+  | { kind: 'malformed'; field: null };
 
-/**
- * Выбирает применимую цену для размера.
- * - prefer цену с organizationId (single string) или organizations (array),
- *   содержащим organizationId;
- * - иначе, если положительная цена единственна — берём её;
- * - если положительных цен несколько и нет орг-матча — ambiguous (пропуск),
- *   НЕ используем max price как каноническую.
- */
-function choosePrice(
-  prices: unknown[],
-  organizationId: string,
-  warnings: string[],
-  itemId: string,
-  sizeId: string,
-): PriceChoice {
-  let malformed = false;
-  const orgMatches: number[] = [];
-  const positiveGeneric: number[] = [];
+function chooseFirstPositivePrice(prices: unknown[]): PriceChoice {
+  let hasFinitePrice = false;
 
   for (const priceRaw of prices) {
     const priceRecord = asRecord(priceRaw);
-    const candidate = readPrice(priceRecord);
-    if (candidate === null) {
-      malformed = true;
-      continue;
-    }
-    if (!(candidate > 0)) {
-      // null/0/отрицательные/NaN — пропускаем эту цену.
-      continue;
-    }
-    // Поддерживаем два формата iiko:
-    //   - newer: { organizationId: "uuid", price: "2500" }
-    //   - older: { organizations: ["uuid"], price: 2500 }
-    const orgIdField = optionalString(priceRecord?.organizationId);
-    const orgs = asArray(priceRecord?.organizations);
-    if (orgIdField) {
-      if (orgIdField === organizationId) {
-        orgMatches.push(candidate);
+    const candidates: Array<{ field: PriceField; value: unknown }> = priceRecord
+      ? [
+          { field: 'price', value: priceRecord.price },
+          { field: 'currentPrice', value: priceRecord.currentPrice },
+          { field: 'amount', value: priceRecord.amount },
+          { field: 'value', value: priceRecord.value },
+        ]
+      : [{ field: 'primitive', value: priceRaw }];
+
+    for (const candidate of candidates) {
+      const finite = coerceFinitePrice(candidate.value);
+      if (finite === null) continue;
+      hasFinitePrice = true;
+      const positive = coercePositivePrice(candidate.value);
+      if (positive !== null) {
+        return { kind: 'ok', price: positive, field: candidate.field };
       }
-      // Цена с organizationId, но не нашим — не учитываем как generic.
-    } else if (orgs.length > 0) {
-      const belongs = orgs.some(
-        (org) => optionalString(asRecord(org)?.id) === organizationId,
-      );
-      if (belongs) {
-        orgMatches.push(candidate);
-      }
-      // Цены с organizations, но не нашей — не учитываем как generic.
-    } else {
-      positiveGeneric.push(candidate);
     }
   }
 
-  if (orgMatches.length === 1) {
-    return { kind: 'ok', price: orgMatches[0]!, orgMatched: true };
-  }
-  if (orgMatches.length > 1) {
-    warnings.push(`item ${itemId} size ${sizeId}: несколько орг-цен — пропущено (ambiguous)`);
-    return { kind: 'ambiguous' };
-  }
-  // Нет орг-матча.
-  if (positiveGeneric.length === 1) {
-    return { kind: 'ok', price: positiveGeneric[0]!, orgMatched: false };
-  }
-  if (positiveGeneric.length > 1) {
-    warnings.push(
-      `item ${itemId} size ${sizeId}: несколько положительных цен без орг-матча — пропущено (ambiguous, max не используется)`,
-    );
-    return { kind: 'ambiguous' };
-  }
-  // Ни одной положительной цены.
-  if (malformed) {
-    return { kind: 'malformed' };
-  }
-  return { kind: 'zero' };
+  return hasFinitePrice ? { kind: 'zero', field: null } : { kind: 'malformed', field: null };
 }
 
 function buildDisplayName(name: string, sizeName: string | null): string {
@@ -379,103 +321,95 @@ function buildDisplayName(name: string, sizeName: string | null): string {
  *   - comma decimal string ("2500,00").
  * Возвращает number > 0 или null для мусора/нуля/отрицательных.
  */
-export function normalizePositivePrice(value: unknown): number | null {
-  const parsed = parsePriceValue(value);
-  if (parsed === null) return null;
-  return parsed > 0 ? parsed : null;
-}
-
-/**
- * Разбирает значение цены в number (включая 0 и отрицательные).
- * Возвращает null только для непарсируемого мусора.
- * Используется внутри readPrice, где нужно отличать "ноль" от "мусор".
- */
-function parsePriceValue(value: unknown): number | null {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : null;
+export function coercePositivePrice(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') {
+    return null;
   }
+
   if (typeof value === 'string') {
-    const normalized = Number(value.trim().replace(',', '.'));
-    return Number.isFinite(normalized) ? normalized : null;
+    value = value.trim().replace(',', '.');
   }
-  return null;
+
+  const numeric = Number(value);
+
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
 }
 
-/**
- * Извлекает числовую цену из price-объекта iiko.
- * Проверяет все возможные расположения цены в реальном ответе /api/2/menu/by_id:
- *   - priceRecord.price          (number или string — основной формат v2 menu);
- *   - priceRecord.price.currentPrice (вложенный объект — формат v1 nomenclature);
- *   - priceRecord.amount         (альтернативное имя);
- *   - priceRecord.value          (альтернативное имя).
- * Возвращает number (включая 0 и отрицательные) или null для мусора.
- * Вызывающий (choosePrice) решает, является ли цена положительной.
- */
-function readPrice(priceRecord: Record<string, unknown> | undefined): number | null {
-  if (!priceRecord) return null;
+export const normalizePositivePrice = coercePositivePrice;
 
-  // 1. price как примитив (number или string) — основной формат /api/2/menu/by_id.
-  const directPrice = priceRecord.price;
-  if (typeof directPrice === 'number' || typeof directPrice === 'string') {
-    return parsePriceValue(directPrice);
-  }
-
-  // 2. price как объект с currentPrice — формат v1 nomenclature sizePrices.
-  const priceObj = asRecord(directPrice);
-  if (priceObj) {
-    const current = parsePriceValue(priceObj.currentPrice);
-    if (current !== null) return current;
-  }
-
-  // 3. amount — альтернативное имя.
-  const amount = parsePriceValue(priceRecord.amount);
-  if (amount !== null) return amount;
-
-  // 4. value — альтернативное имя.
-  const value = parsePriceValue(priceRecord.value);
-  if (value !== null) return value;
-
-  return null;
+function coerceFinitePrice(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const normalized = typeof value === 'string' ? value.trim().replace(',', '.') : value;
+  const numeric = Number(normalized);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
-/**
- * Строит безопасную диагностику парсера для первого item+size с prices.
- * Никогда не содержит значения секретов или полное тело меню — только
- * имена полей, типы и агрегированные счётчики.
- */
-function buildParserDiagnostic(
+function buildParserSample(
+  item: Record<string, unknown>,
   itemName: string,
+  size: Record<string, unknown>,
   sizeName: string | null,
-  prices: unknown[],
-): ParserDiagnostic {
-  const firstPrice = asRecord(prices[0]);
-  const priceValue = firstPrice?.price;
-  let priceValueType: ParserDiagnostic['priceValueType'] = null;
-  if (priceValue === undefined) priceValueType = 'undefined';
-  else if (priceValue === null) priceValueType = 'null';
-  else if (typeof priceValue === 'number') priceValueType = 'number';
-  else if (typeof priceValue === 'string') priceValueType = 'string';
-  else if (typeof priceValue === 'boolean') priceValueType = 'boolean';
-  else if (typeof priceValue === 'object') priceValueType = 'object';
-
-  const priceObjectKeys = firstPrice ? Object.keys(firstPrice) : [];
-
-  let validPositivePriceCount = 0;
-  for (const priceRaw of prices) {
-    const parsed = readPrice(asRecord(priceRaw));
-    if (parsed !== null && parsed > 0) {
-      validPositivePriceCount += 1;
-    }
-  }
+  pricesRaw: unknown,
+  chosen: PriceChoice,
+): ParserSample {
+  const prices = asArray(pricesRaw);
+  const firstPriceRaw = prices[0];
+  const firstPrice = asRecord(firstPriceRaw);
+  const priceValue = firstPrice ? firstPrice.price : firstPriceRaw;
+  const numberConversion = safelyConvertWithNumber(priceValue);
 
   return {
-    firstItemName: itemName,
-    firstSizeName: sizeName,
-    pricesArrayLength: prices.length,
-    priceValueType,
-    priceObjectKeys,
-    validPositivePriceCount,
+    itemName,
+    itemKeys: safeKeys(item),
+    sizeName,
+    sizeKeys: safeKeys(size),
+    pricesIsArray: Array.isArray(pricesRaw),
+    pricesLength: prices.length,
+    firstPriceRaw: sanitizeDiagnosticValue(firstPriceRaw),
+    firstPriceKeys: firstPrice ? safeKeys(firstPrice) : [],
+    priceValue: sanitizeDiagnosticValue(priceValue),
+    priceValueType: valueType(priceValue),
+    javascriptNumberConversion: numberConversion,
+    positiveByPostmanRule: priceValue !== null && numberConversion !== null && numberConversion > 0,
+    selectedPriceField: chosen.kind === 'ok' ? chosen.field : null,
+    coercedPositivePrice: chosen.kind === 'ok' ? chosen.price : null,
   };
+}
+
+const SENSITIVE_DIAGNOSTIC_KEY =
+  /authorization|api[-_]?key|api[-_]?login|app[-_]?id|client[-_]?secret|bearer|token|secret/i;
+
+function safeKeys(value: Record<string, unknown>): string[] {
+  return Object.keys(value).filter((key) => !SENSITIVE_DIAGNOSTIC_KEY.test(key));
+}
+
+function sanitizeDiagnosticValue(value: unknown, depth = 0): unknown {
+  if (depth > 3) return null;
+  if (Array.isArray(value)) {
+    return value.slice(0, 10).map((entry) => sanitizeDiagnosticValue(entry, depth + 1));
+  }
+  const record = asRecord(value);
+  if (record) {
+    return Object.fromEntries(
+      safeKeys(record).map((key) => [key, sanitizeDiagnosticValue(record[key], depth + 1)]),
+    );
+  }
+  return value === undefined ? null : value;
+}
+
+function safelyConvertWithNumber(value: unknown): number | null {
+  try {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  } catch {
+    return null;
+  }
+}
+
+function valueType(value: unknown): ParserSample['priceValueType'] {
+  if (value === null) return 'null';
+  if (value === undefined) return 'undefined';
+  return typeof value as ParserSample['priceValueType'];
 }
 
 function isFlagTrue(value: unknown): boolean {

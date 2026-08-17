@@ -11,7 +11,7 @@ import { toMoney } from '../../lib/money.js';
 import type { AuditService } from '../../services/audit.service.js';
 import type { IikoClient } from '../../services/iiko-client.service.js';
 import type { TelegramService } from '../../services/telegram.service.js';
-import { parseExternalMenu } from './iiko-menu-parser.js';
+import { parseExternalMenu, type ParserSample } from './iiko-menu-parser.js';
 
 export interface SyncOrganizationsResult {
   fetched: number;
@@ -50,6 +50,8 @@ const NO_SIZE_FALLBACK = '__no_size__';
  * Сырое тело меню никогда не логируется и не возвращается — только сводка.
  */
 export class IikoSyncService {
+  private latestParserSamples: ParserSample[] = [];
+
   constructor(
     private readonly prisma: PrismaClient,
     private readonly env: AppEnv,
@@ -224,6 +226,7 @@ export class IikoSyncService {
         externalMenuId,
         currency: 'KZT',
       });
+      this.latestParserSamples = parsed.parserSamples;
     } catch {
       throw iikoMenuParserFailed('Получено меню HTTP 2xx, но внутренняя нормализация завершилась ошибкой.');
     }
@@ -270,9 +273,7 @@ export class IikoSyncService {
           sourceMenuId: parsed.sourceMenuId,
           sourceExternalMenuId: parsed.sourceExternalMenuId,
           sourceMetadata: variant.sourceMetadata as Prisma.InputJsonValue,
-          syncWarnings: variant.syncWarnings.length
-            ? (variant.syncWarnings as unknown as Prisma.InputJsonValue)
-            : Prisma.JsonNull,
+          syncWarnings: variant.syncWarnings as unknown as Prisma.InputJsonValue,
           lastSeenAt: syncedAt,
           syncedAt,
         };
@@ -288,6 +289,7 @@ export class IikoSyncService {
             organizationId: organization.id,
             iikoItemId: variant.iikoItemId,
             basePrice: basePrice.toString(),
+            isExchangeProduct: false,
             priceStep: this.env.PRICE_DEFAULT_STEP.toString(),
             maxChangePercent: this.env.PRICE_MAX_CHANGE_PERCENT.toString(),
             ...upsertData,
@@ -437,6 +439,10 @@ export class IikoSyncService {
         : `Синхронизация меню не удалась: ${summary.error ?? 'ошибка'}`,
       metadata: safeMetadata,
     });
+  }
+
+  getLatestParserSamples(): { samples: ParserSample[] } {
+    return { samples: this.latestParserSamples };
   }
 
   async getLastMenuSyncAt(): Promise<string | null> {

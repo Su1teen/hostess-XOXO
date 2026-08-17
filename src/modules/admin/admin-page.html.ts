@@ -149,6 +149,15 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         </div>
 
         <div class="card">
+          <h2>Диагностика формата цены iiko</h2>
+          <table id="parserSampleTable">
+            <tbody>
+              <tr><td class="muted" colspan="2">Нет данных — выполните синхронизацию меню.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
           <h2>Товары биржи</h2>
           <div class="row">
             <div>
@@ -428,6 +437,35 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
             .join('');
         }
 
+        function renderParserSample(data) {
+          var tbody = el('parserSampleTable').querySelector('tbody');
+          var sample = data && data.samples && data.samples[0];
+          if (!sample) {
+            tbody.innerHTML = '<tr><td class="muted" colspan="2">Samples отсутствуют.</td></tr>';
+            return;
+          }
+          var rows = [
+            ['Товар', sample.itemName || '—'],
+            ['Размер', sample.sizeName || '—'],
+            ['Сырое значение цены', JSON.stringify(sample.priceValue)],
+            ['Тип значения', sample.priceValueType],
+            ['Number(value)', sample.javascriptNumberConversion === null ? '—' : sample.javascriptNumberConversion],
+            ['Выбранное поле цены', sample.selectedPriceField || '—'],
+            ['Преобразованная положительная цена', sample.coercedPositivePrice === null ? '—' : sample.coercedPositivePrice],
+            ['Postman predicate', flag(sample.positiveByPostmanRule)],
+            ['Первый price record', JSON.stringify(sample.firstPriceRaw)],
+          ];
+          tbody.innerHTML = rows
+            .map(function (row) {
+              return '<tr><th>' + escapeHtml(row[0]) + '</th><td>' + escapeHtml(row[1]) + '</td></tr>';
+            })
+            .join('');
+        }
+
+        function loadParserSample() {
+          return request('GET', '/api/v1/admin/iiko/parser-sample').then(renderParserSample);
+        }
+
         function renderRounds(items) {
           var tbody = el('roundsTable').querySelector('tbody');
           if (!items || items.length === 0) {
@@ -573,7 +611,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           silent(
             request('POST', '/api/v1/admin/iiko/sync-menu').then(function (summary) {
               renderSyncSummary(summary);
-              return Promise.all([loadCategories(), loadProducts()]);
+              return Promise.all([loadCategories(), loadProducts(), loadParserSample()]);
             }),
           );
         });
@@ -644,7 +682,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
 
         if (saved) {
           silent(loadDiagnostics().then(function () {
-            return Promise.all([loadCategories(), loadProducts()]);
+            return Promise.all([loadCategories(), loadProducts(), loadParserSample()]);
           }));
         }
       })();

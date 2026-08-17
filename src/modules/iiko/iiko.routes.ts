@@ -167,6 +167,19 @@ export async function iikoRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.get(
+    `${API_PREFIX}/admin/iiko/parser-sample`,
+    {
+      preHandler: app.requireAdmin,
+      schema: {
+        tags: ['iiko'],
+        summary: 'Безопасные samples формата цены из последней синхронизации меню',
+        security: [{ adminApiKey: [] }],
+      },
+    },
+    async () => app.services.iikoSync.getLatestParserSamples(),
+  );
+
+  app.get(
     `${API_PREFIX}/admin/iiko/last-sync-summary`,
     {
       preHandler: app.requireAdmin,
