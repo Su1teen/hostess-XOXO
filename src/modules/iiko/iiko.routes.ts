@@ -103,8 +103,11 @@ export async function iikoRoutes(app: FastifyInstance): Promise<void> {
       preHandler: app.requireAdmin,
       schema: {
         tags: ['iiko'],
-        summary: 'Синхронизировать номенклатуру выбранной организации',
-        description: 'Только чтение из iiko. Пропавшие товары помечаются ARCHIVED, а не удаляются.',
+        summary: 'Синхронизировать внешнее меню выбранной организации (/api/2/menu)',
+        description:
+          'Только чтение из iiko. Извлекаются sellable item-size variants. ' +
+          'Пропавшие варианты помечаются недоступными, а не удаляются. ' +
+          'Возвращается только сводка — без сырого тела меню.',
         security: [{ adminApiKey: [] }],
       },
     },
@@ -112,19 +115,15 @@ export async function iikoRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.get(
-    `${API_PREFIX}/admin/iiko/groups`,
+    `${API_PREFIX}/admin/iiko/last-sync-summary`,
     {
       preHandler: app.requireAdmin,
       schema: {
         tags: ['iiko'],
-        summary: 'Группы номенклатуры выбранной организации',
+        summary: 'Сводка последней синхронизации меню (без сырого тела)',
         security: [{ adminApiKey: [] }],
       },
     },
-    async () => {
-      const organization = await app.prisma.organization.findFirst({ where: { isSelected: true } });
-      const groups = await app.services.products.listGroups(organization?.id);
-      return { items: groups };
-    },
+    async () => app.services.iikoSync.getLastMenuSyncSummary(),
   );
 }

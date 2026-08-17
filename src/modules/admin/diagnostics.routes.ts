@@ -29,13 +29,14 @@ export async function diagnosticsRoutes(app: FastifyInstance): Promise<void> {
         database = 'unavailable';
       }
 
-      const [organization, counts, publishedRound, simulatedRound, lastSyncAt, lastWebhook] =
+      const [organization, counts, publishedRound, simulatedRound, lastSyncAt, lastSyncSummary, lastWebhook] =
         await Promise.all([
           app.prisma.organization.findFirst({ where: { isSelected: true } }),
           app.services.products.counts(),
           app.services.rounds.getCurrentPublishedRound(),
           app.services.rounds.getLatestSimulatedRound(),
           app.services.iikoSync.getLastMenuSyncAt(),
+          app.services.iikoSync.getLastMenuSyncSummary(),
           app.prisma.salesEvent.findFirst({ orderBy: { receivedAt: 'desc' } }),
         ]);
 
@@ -57,7 +58,8 @@ export async function diagnosticsRoutes(app: FastifyInstance): Promise<void> {
           iiko: app.services.iikoClient.isConfigured ? 'configured' : 'not_configured',
         },
         iiko: {
-          baseUrl: app.env.IIKO_API_BASE_URL,
+          authBaseUrl: app.env.IIKO_AUTH_BASE_URL,
+          menuBaseUrl: app.env.IIKO_MENU_BASE_URL,
           syncEnabled: app.env.IIKO_SYNC_ENABLED,
           apiKey: maskPresence(app.env.IIKO_API_KEY),
           appId: maskPresence(app.env.IIKO_APP_ID),
@@ -107,6 +109,7 @@ export async function diagnosticsRoutes(app: FastifyInstance): Promise<void> {
         },
         sync: {
           lastMenuSyncAt: lastSyncAt,
+          lastSummary: lastSyncSummary,
         },
         webhook: {
           secretConfigured: maskPresence(app.env.IIKO_WEBHOOK_SECRET) !== 'not_set',
@@ -140,8 +143,8 @@ export async function diagnosticsRoutes(app: FastifyInstance): Promise<void> {
         tags: ['Admin Diagnostics'],
         summary: 'Двухстадийная диагностика iiko: auth + menu (без раскрытия секретов)',
         description:
-          'Выполняет две независимые стадии: (1) POST /api/v2/access_token и (2) при успехе — ' +
-          'POST /api/v2/menu с Bearer-токеном. Возвращает только безопасные факты: итоговые URL, ' +
+          'Выполняет две независимые стадии: (1) POST {IIKO_AUTH_BASE_URL}/access_token и (2) при успехе — ' +
+          'POST {IIKO_MENU_BASE_URL}/menu с Bearer-токеном. Возвращает только безопасные факты: итоговые URL, ' +
           'метод, факты настройки учётных данных, upstream HTTP-статус и correlationId для каждой ' +
           'стадии, безопасное сообщение об ошибке. Ошибки меню отмечаются отдельно и никогда не ' +
           'маскируются под IIKO_AUTH_FAILED. Значения секретов, apiLogin, токена и тела запроса ' +

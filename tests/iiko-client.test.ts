@@ -31,6 +31,8 @@ function createClient(
     clientSecret?: string;
     authPath?: string;
     menuPath?: string;
+    authBaseUrl?: string;
+    menuBaseUrl?: string;
     externalMenuId?: string;
     organizationId?: string;
   } = {},
@@ -45,7 +47,8 @@ function createClient(
   const attempts: IikoAttemptRecord[] = [];
 
   const client = new IikoClient({
-    baseUrl: 'https://api-ru.iiko.services/api/v2',
+    authBaseUrl: overrides.authBaseUrl ?? 'https://api-ru.iiko.services/api/v2',
+    menuBaseUrl: overrides.menuBaseUrl ?? 'https://api-ru.iiko.services/api/2',
     apiKey: 'apiKey' in overrides ? overrides.apiKey : 'test-api-login',
     appId: 'appId' in overrides ? overrides.appId : 'test-app-id',
     clientSecret:
@@ -72,7 +75,9 @@ function createClient(
   return { fetchMock, attempts, client };
 }
 
-describe('IikoClient', () => {
+const ORG_ID = 'cc9baa8d-cfac-4092-9c97-477746fe84e2';
+
+describe('IikoClient endpoints', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -102,10 +107,7 @@ describe('IikoClient', () => {
     await client.getOrganizations();
     await client.getOrganizations();
 
-    // 1 access_token + 2 organizations, повторного логина нет.
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    const authUrl = fetchMock.mock.calls[1]?.[0];
-    expect(String(authUrl)).toBe('https://api-ru.iiko.services/api/1/organizations');
   });
 
   it('передаёт Bearer-токен и не логирует apiKey', async () => {
@@ -134,33 +136,6 @@ describe('IikoClient', () => {
     const organizations = await client.getOrganizations();
     expect(organizations.map((item) => item.id)).toEqual(['org-1', 'org-2']);
     expect(organizations[0]?.name).toBe('Без названия');
-  });
-
-  it('нормализует номенклатуру, включая цену из sizePrices', async () => {
-    const { client } = createClient([
-      jsonResponse({ token: 't' }),
-      jsonResponse({
-        revision: 42,
-        groups: [{ id: 'g1', name: 'Бар' }],
-        products: [
-          {
-            id: 'p1',
-            name: 'Gin Tonic',
-            parentGroup: 'g1',
-            sizePrices: [{ price: { currentPrice: 2900 } }],
-          },
-          { id: 'p2', name: 'Espresso', price: 900 },
-          { name: 'без id' },
-        ],
-      }),
-    ]);
-
-    const nomenclature = await client.getNomenclature('org-1');
-    expect(nomenclature.revision).toBe(42);
-    expect(nomenclature.groups).toHaveLength(1);
-    expect(nomenclature.products).toHaveLength(2);
-    expect(nomenclature.products[0]?.price).toBe(2900);
-    expect(nomenclature.products[1]?.price).toBe(900);
   });
 
   it('повторяет запрос при сетевой ошибке', async () => {
@@ -221,24 +196,21 @@ describe('IikoClient', () => {
     expect(attempts.every((attempt) => attempt.status === 'SUCCESS')).toBe(true);
   });
 
-  it('не выполняет write-запросов: используются только документированные read-only пути', async () => {
+  it('использует только read-only пути: auth /api/v2/access_token, menu /api/2/menu, organizations /api/1/organizations', async () => {
     const { client, fetchMock } = createClient([
       jsonResponse({ token: 't' }),
       jsonResponse({ organizations: [] }),
-      jsonResponse({ groups: [], products: [] }),
-      jsonResponse({ terminalGroupStopLists: [] }),
+      jsonResponse({ items: [] }),
     ]);
 
     await client.getOrganizations();
-    await client.getNomenclature('org-1');
-    await client.getStopList('org-1');
+    await client.getExternalMenu(ORG_ID);
 
     const urls = fetchMock.mock.calls.map((call) => String(call[0]));
     expect(urls).toEqual([
       'https://api-ru.iiko.services/api/v2/access_token',
       'https://api-ru.iiko.services/api/1/organizations',
-      'https://api-ru.iiko.services/api/1/nomenclature',
-      'https://api-ru.iiko.services/api/1/stop_lists',
+      'https://api-ru.iiko.services/api/2/menu',
     ]);
     expect(urls.some((url) => /order|price|command/i.test(url))).toBe(false);
   });
@@ -254,21 +226,18 @@ describe('IikoClient', () => {
     expect(body.clientSecret).toBe('test-client-secret');
     expect(body.returnAdditionalInfo).toBe(false);
     expect(body.includeDisabled).toBe(false);
-    // Тело использует apiLogin, не apiKey; organizationId в auth не передаётся.
     expect(body.apiKey).toBeUndefined();
     expect(body.organizationId).toBeUndefined();
     expect(body.organizationIds).toBeUndefined();
-    // Флаги — настоящие boolean, не строки.
     expect(typeof body.returnAdditionalInfo).toBe('boolean');
     expect(typeof body.includeDisabled).toBe('boolean');
   });
 
-  it('строит URL авторизации v2 без дублирования /api/1', async () => {
+  it('строит корректный URL авторизации: /api/v2/access_token', async () => {
     const { client, fetchMock } = createClient([jsonResponse({ token: 't' })]);
     await client.getAccessToken();
     const authUrl = String(fetchMock.mock.calls[0]?.[0]);
     expect(authUrl).toBe('https://api-ru.iiko.services/api/v2/access_token');
-    // /api/1 не должно быть в URL авторизации вообще.
     expect(authUrl).not.toContain('/api/1');
   });
 
@@ -282,24 +251,15 @@ describe('IikoClient', () => {
     );
   });
 
-  it('не дублирует /api/v2 при построении URL авторизации', async () => {
-    const { client, fetchMock } = createClient([jsonResponse({ token: 't' })]);
-    await client.getAccessToken();
-    const authUrl = String(fetchMock.mock.calls[0]?.[0]);
-    expect(authUrl.match(/\/api\/v2/g)?.length).toBe(1);
-    expect(authUrl).not.toContain('/api/v2/api/v2');
-  });
-
-  it('строит URL меню из IIKO_MENU_PATH без дублирования', async () => {
+  it('строит корректный URL меню: /api/2/menu (НЕ /api/v2/menu)', async () => {
     const { client, fetchMock } = createClient([
       jsonResponse({ token: 't' }),
-      jsonResponse({ groups: [] }),
+      jsonResponse({ items: [] }),
     ]);
-    await client.getExternalMenuOrMenu('cc9baa8d-cfac-4092-9c97-477746fe84e2');
+    await client.getExternalMenu(ORG_ID);
     const menuUrl = String(fetchMock.mock.calls[1]?.[0]);
-    expect(menuUrl).toBe('https://api-ru.iiko.services/api/v2/menu');
-    expect(menuUrl.match(/\/api\/v2/g)?.length).toBe(1);
-    expect(menuUrl).not.toContain('/api/v2/api/v2');
+    expect(menuUrl).toBe('https://api-ru.iiko.services/api/2/menu');
+    expect(menuUrl).not.toContain('/api/v2/menu');
   });
 
   it('isConfigured требует apiLogin, appId и clientSecret', async () => {
@@ -313,38 +273,37 @@ describe('IikoClient', () => {
     expect(all.client.isConfigured).toBe(true);
   });
 
-  it('getExternalMenuOrMenu шлёт externalMenuId + organizationIds на /api/v2/menu', async () => {
+  it('getExternalMenu шлёт externalMenuId + organizationIds на /api/2/menu с Bearer', async () => {
     const { client, fetchMock } = createClient([
       jsonResponse({ token: 't' }),
-      jsonResponse({ groups: [] }),
+      jsonResponse({ items: [] }),
     ]);
-    await client.getExternalMenuOrMenu('cc9baa8d-cfac-4092-9c97-477746fe84e2');
+    await client.getExternalMenu(ORG_ID);
 
     const menuUrl = String(fetchMock.mock.calls[1]?.[0]);
-    expect(menuUrl).toBe('https://api-ru.iiko.services/api/v2/menu');
+    expect(menuUrl).toBe('https://api-ru.iiko.services/api/2/menu');
     const init = fetchMock.mock.calls[1]?.[1] as RequestInit;
     const body = JSON.parse(String(init.body));
     expect(body.externalMenuId).toBe('88042');
-    expect(body.organizationIds).toEqual(['cc9baa8d-cfac-4092-9c97-477746fe84e2']);
+    expect(body.organizationIds).toEqual([ORG_ID]);
     const headers = init.headers as Record<string, string>;
     expect(headers.authorization).toBe('Bearer t');
   });
 
-  it('getExternalMenuOrMenu требует externalMenuId', async () => {
+  it('getExternalMenu требует externalMenuId', async () => {
     const { client } = createClient([jsonResponse({ token: 't' })], {
       externalMenuId: undefined,
     });
-    await expect(
-      client.getExternalMenuOrMenu('cc9baa8d-cfac-4092-9c97-477746fe84e2'),
-    ).rejects.toMatchObject({ code: 'IIKO_NOT_CONFIGURED' });
+    await expect(client.getExternalMenu(ORG_ID)).rejects.toMatchObject({
+      code: 'IIKO_NOT_CONFIGURED',
+    });
   });
 
   it('diagnoseAuth: две стадии auth+menu, без токена и секретов', async () => {
-    // auth (диагностика) + auth (для токена меню) + menu
     const { client, fetchMock } = createClient([
       jsonResponse({ token: 'session-key', correlationId: 'corr-auth' }, 200),
       jsonResponse({ token: 'session-key', correlationId: 'corr-auth-2' }, 200),
-      jsonResponse({ groups: [], correlationId: 'corr-menu' }, 200),
+      jsonResponse({ items: [], correlationId: 'corr-menu' }, 200),
     ]);
     const diag = await client.diagnoseAuth();
 
@@ -354,7 +313,6 @@ describe('IikoClient', () => {
     expect(diag.externalMenuIdConfigured).toBe(true);
     expect(diag.organizationIdConfigured).toBe(true);
 
-    // Стадия auth.
     expect(diag.auth.finalUrl).toBe('https://api-ru.iiko.services/api/v2/access_token');
     expect(diag.auth.method).toBe('POST');
     expect(diag.auth.httpStatus).toBe(200);
@@ -362,24 +320,18 @@ describe('IikoClient', () => {
     expect(diag.auth.success).toBe(true);
     expect(diag.auth.error).toBeNull();
 
-    // Стадия menu.
     expect(diag.menu).not.toBeNull();
-    expect(diag.menu?.finalUrl).toBe('https://api-ru.iiko.services/api/v2/menu');
+    expect(diag.menu?.finalUrl).toBe('https://api-ru.iiko.services/api/2/menu');
     expect(diag.menu?.httpStatus).toBe(200);
     expect(diag.menu?.correlationId).toBe('corr-menu');
     expect(diag.menu?.success).toBe(true);
 
-    // Токен и секреты не попадают в диагностику.
     const serialized = JSON.stringify(diag);
     expect(serialized).not.toContain('session-key');
     expect(serialized).not.toContain('test-api-login');
     expect(serialized).not.toContain('test-app-id');
     expect(serialized).not.toContain('test-client-secret');
 
-    // Тело запроса auth содержит секреты, но диагностика их не раскрывает.
-    const authInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
-    expect(String(authInit.body)).toContain('test-client-secret');
-    // Тело menu содержит externalMenuId и Bearer, но диагностика не раскрывает токен.
     const menuInit = fetchMock.mock.calls[2]?.[1] as RequestInit;
     const menuHeaders = menuInit.headers as Record<string, string>;
     expect(menuHeaders.authorization).toBe('Bearer session-key');
@@ -402,7 +354,6 @@ describe('IikoClient', () => {
   });
 
   it('diagnoseAuth: ошибка меню не маскируется под IIKO_AUTH_FAILED', async () => {
-    // auth (диагностика) + auth (токен) + menu 404
     const { client } = createClient([
       jsonResponse({ token: 'session-key' }, 200),
       jsonResponse({ token: 'session-key' }, 200),
@@ -416,7 +367,6 @@ describe('IikoClient', () => {
     expect(diag.menu?.success).toBe(false);
     expect(diag.menu?.error).toContain('Menu not found');
     expect(diag.menu?.correlationId).toBe('corr-menu-err');
-    // Auth при этом успешен — ошибка изолирована на стадии menu.
     expect(diag.auth.error).toBeNull();
   });
 
@@ -434,7 +384,6 @@ describe('IikoClient', () => {
     expect(diag.menu?.success).toBe(false);
     expect(diag.menu?.httpStatus).toBeNull();
     expect(diag.menu?.error).toMatch(/IIKO_EXTERNAL_MENU_ID/);
-    // Только один запрос — auth (диагностика); токен для меню не запрашивается.
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -448,5 +397,19 @@ describe('IikoClient', () => {
     expect(diag.auth.success).toBe(false);
     expect(diag.menu).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('диагностика никогда не содержит токен или секреты', async () => {
+    const { client } = createClient([
+      jsonResponse({ token: 'session-key', correlationId: 'c1' }, 200),
+      jsonResponse({ token: 'session-key', correlationId: 'c2' }, 200),
+      jsonResponse({ items: [], correlationId: 'c3' }, 200),
+    ]);
+    const diag = await client.diagnoseAuth();
+    const serialized = JSON.stringify(diag);
+    expect(serialized).not.toContain('session-key');
+    expect(serialized).not.toContain('test-api-login');
+    expect(serialized).not.toContain('test-client-secret');
+    expect(serialized).not.toContain('Bearer');
   });
 });

@@ -4,33 +4,37 @@ import { redactDeep, sanitizeMessage } from '../lib/redaction.js';
 /**
  * Типизированный клиент iiko Cloud API (api-ru.iiko.services).
  *
- * Используются только read-only endpoints, задокументированные в iikoCloud API:
- *   POST /api/1/access_token      — получение session key по apiLogin
- *   POST /api/1/organizations     — список организаций
- *   POST /api/1/nomenclature      — номенклатура организации
- *   POST /api/1/stop_lists        — стоп-лист
- *   POST /api/1/terminal_groups   — терминальные группы
- *   POST /api/2/menu              — внешние меню (v2)
- *   POST /api/2/menu/by_id        — внешнее меню по ID (v2)
+ * Используются только read-only endpoints:
+ *   POST {IIKO_AUTH_BASE_URL}/access_token  — авторизация (api/v2)
+ *   POST {IIKO_MENU_BASE_URL}/menu          — внешнее меню (api/2)
+ *   POST {apiRoot}/api/1/organizations      — список организаций (legacy v1)
+ *
+ * Важно: auth и menu живут на РАЗНЫХ базах.
+ *   authBaseUrl = https://api-ru.iiko.services/api/v2
+ *   menuBaseUrl = https://api-ru.iiko.services/api/2
+ * Не использовать общий baseUrl для обеих операций.
  *
  * v0.1 не выполняет никаких write-операций: не создаёт заказы, не меняет цены,
  * не создаёт прайс-приказы.
  */
 
 export interface IikoClientOptions {
-  baseUrl: string;
+  /** База авторизации, например https://api-ru.iiko.services/api/v2. */
+  authBaseUrl: string;
+  /** База запроса меню, например https://api-ru.iiko.services/api/2. */
+  menuBaseUrl: string;
   apiKey?: string;
   appId?: string;
   clientSecret?: string;
-  /** Путь авторизации относительно baseUrl, по умолчанию /access_token. */
+  /** Путь авторизации относительно authBaseUrl, по умолчанию /access_token. */
   authPath?: string;
-  /** Путь запроса меню относительно baseUrl, по умолчанию /menu. */
+  /** Путь запроса меню относительно menuBaseUrl, по умолчанию /menu. */
   menuPath?: string;
   authReturnAdditionalInfo?: boolean;
   authIncludeDisabled?: boolean;
-  /** Внешнее меню iiko (externalMenuId) для запроса /api/v2/menu. */
+  /** Внешнее меню iiko (externalMenuId) для запроса /api/2/menu. */
   externalMenuId?: string;
-  /** Организация по умолчанию (organizationId) для запроса /api/v2/menu. */
+  /** Организация по умолчанию (organizationId) для запроса /api/2/menu. */
   organizationId?: string;
   timeoutMs: number;
   syncEnabled: boolean;
@@ -71,37 +75,6 @@ export interface IikoOrganization {
   country?: string;
   restaurantAddress?: string;
   isActive?: boolean;
-}
-
-export interface IikoProductGroupDto {
-  id: string;
-  parentGroup?: string | null;
-  name: string;
-  isDeleted?: boolean;
-}
-
-export interface IikoProductDto {
-  id: string;
-  parentGroup?: string | null;
-  name: string;
-  description?: string | null;
-  code?: string | null;
-  type?: string | null;
-  measureUnit?: string | null;
-  price?: number | null;
-  isDeleted?: boolean;
-  imageLinks?: string[];
-}
-
-export interface IikoNomenclature {
-  revision?: number;
-  groups: IikoProductGroupDto[];
-  products: IikoProductDto[];
-}
-
-export interface IikoStopListItem {
-  productId: string;
-  balance?: number | null;
 }
 
 export interface IikoTestConnectionResult {
@@ -152,19 +125,18 @@ const DEFAULT_TOKEN_TTL_MS = 55 * 60 * 1000;
 
 export class IikoClient {
   private readonly options: Required<
-    Pick<IikoClientOptions, 'baseUrl' | 'timeoutMs' | 'syncEnabled' | 'debugRawPayloads'>
+    Pick<
+      IikoClientOptions,
+      'authBaseUrl' | 'menuBaseUrl' | 'timeoutMs' | 'syncEnabled' | 'debugRawPayloads'
+    >
   > &
     IikoClientOptions;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
   /** Корень API без версии: https://api-ru.iiko.services — для legacy v1 endpoints. */
   private readonly apiRoot: string;
-  /** База v2: https://api-ru.iiko.services/api/v2 — для auth и menu. */
-  private readonly v2Base: string;
   private readonly authUrl: string;
   private readonly menuUrl: string;
-  private readonly authPath: string;
-  private readonly menuPath: string;
   private tokenState: TokenState | null = null;
   private inflightToken: Promise<string> | null = null;
 
@@ -172,15 +144,14 @@ export class IikoClient {
     this.options = options;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.now = options.now ?? (() => Date.now());
-    // IIKO_API_BASE_URL=https://api-ru.iiko.services/api/v2
-    //   v2Base  = https://api-ru.iiko.services/api/v2  (для auth/menu)
-    //   apiRoot = https://api-ru.iiko.services          (для legacy v1 endpoints)
-    this.v2Base = normalizeV2Base(options.baseUrl);
-    this.apiRoot = stripApiVersion(this.v2Base);
-    this.authPath = normalizeAuthPath(options.authPath ?? '/access_token');
-    this.menuPath = normalizeMenuPath(options.menuPath ?? '/menu');
-    this.authUrl = `${this.v2Base}${this.authPath}`;
-    this.menuUrl = `${this.v2Base}${this.menuPath}`;
+    // authBaseUrl = https://api-ru.iiko.services/api/v2  -> authUrl  = .../api/v2/access_token
+    // menuBaseUrl = https://api-ru.iiko.services/api/2   -> menuUrl  = .../api/2/menu
+    // apiRoot     = https://api-ru.iiko.services          (для legacy /api/1/organizations)
+    const authBase = normalizeBase(options.authBaseUrl);
+    const menuBase = normalizeBase(options.menuBaseUrl);
+    this.apiRoot = stripApiVersion(authBase);
+    this.authUrl = `${authBase}${normalizePath(options.authPath ?? '/access_token')}`;
+    this.menuUrl = `${menuBase}${normalizePath(options.menuPath ?? '/menu')}`;
   }
 
   get isConfigured(): boolean {
@@ -259,26 +230,13 @@ export class IikoClient {
       .filter((org): org is IikoOrganization => Boolean(org));
   }
 
-  async getNomenclature(organizationId: string): Promise<IikoNomenclature> {
-    const { body } = await this.authorizedRequest<{
-      revision?: number;
-      groups?: unknown;
-      products?: unknown;
-    }>('/api/1/nomenclature', { organizationId }, 'nomenclature', organizationId);
-
-    return {
-      revision: typeof body.revision === 'number' ? body.revision : undefined,
-      groups: asArray(body.groups).map(normalizeGroup).filter(isDefined),
-      products: asArray(body.products).map(normalizeProduct).filter(isDefined),
-    };
-  }
-
   /**
-   * Внешнее меню iiko (API v2): POST {menuUrl}.
+   * Внешнее меню iiko: POST {menuUrl} (= {IIKO_MENU_BASE_URL}/menu = /api/2/menu).
    * Тело: { externalMenuId, organizationIds: [organizationId] }.
    * Токен получается автоматически и кэшируется только в памяти.
+   * Возвращает сырой распарсенный JSON меню; логирование тела отключено.
    */
-  async getExternalMenuOrMenu(
+  async getExternalMenu(
     organizationId: string,
     externalMenuId?: string,
   ): Promise<unknown> {
@@ -289,54 +247,11 @@ export class IikoClient {
     const { body } = await this.authorizedRequest<unknown>(
       this.menuUrl,
       { externalMenuId: menuId, organizationIds: [organizationId] },
-      'menu_v2',
+      'menu',
       organizationId,
       true,
     );
     return body;
-  }
-
-  async getStopList(organizationId: string): Promise<IikoStopListItem[]> {
-    const { body } = await this.authorizedRequest<{ terminalGroupStopLists?: unknown }>(
-      '/api/1/stop_lists',
-      { organizationIds: [organizationId] },
-      'stop_lists',
-      organizationId,
-    );
-
-    const items: IikoStopListItem[] = [];
-    for (const group of asArray(body.terminalGroupStopLists)) {
-      const items_ = asRecord(group)?.items;
-      for (const terminal of asArray(items_)) {
-        for (const item of asArray(asRecord(terminal)?.items)) {
-          const record = asRecord(item);
-          const productId = typeof record?.productId === 'string' ? record.productId : undefined;
-          if (!productId) continue;
-          items.push({
-            productId,
-            balance: typeof record?.balance === 'number' ? record.balance : null,
-          });
-        }
-      }
-    }
-    return items;
-  }
-
-  async getTerminalGroups(organizationId: string): Promise<Array<{ id: string; name: string }>> {
-    const { body } = await this.authorizedRequest<{ terminalGroups?: unknown }>(
-      '/api/1/terminal_groups',
-      { organizationIds: [organizationId] },
-      'terminal_groups',
-      organizationId,
-    );
-    const groups: Array<{ id: string; name: string }> = [];
-    for (const entry of asArray(body.terminalGroups)) {
-      for (const item of asArray(asRecord(entry)?.items)) {
-        const normalized = normalizeIdName(item);
-        if (normalized) groups.push(normalized);
-      }
-    }
-    return groups;
   }
 
   async testConnection(): Promise<IikoTestConnectionResult> {
@@ -740,33 +655,24 @@ export class IikoClient {
 }
 
 /**
- * Нормализует базу v2: убирает trailing slash.
- * IIKO_API_BASE_URL=https://api-ru.iiko.services/api/v2 => https://api-ru.iiko.services/api/v2
+ * Нормализует базу URL: убирает trailing slash.
+ * https://api-ru.iiko.services/api/v2/ => https://api-ru.iiko.services/api/v2
  */
-function normalizeV2Base(baseUrl: string): string {
+function normalizeBase(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
 }
 
 /**
- * Убирает суффикс /api/<version> из v2Base, возвращая корень API.
+ * Убирает суффикс /api/<version> из base, возвращая корень API.
  * https://api-ru.iiko.services/api/v2 => https://api-ru.iiko.services
- * https://api-ru.iiko.services/api/1  => https://api-ru.iiko.services
- * Используется только для legacy v1 endpoints (organizations, nomenclature и т.д.),
- * которые не являются частью активной v2-интеграции auth+menu.
+ * Используется только для legacy v1 endpoints (/api/1/organizations).
  */
-function stripApiVersion(v2Base: string): string {
-  return v2Base.replace(/\/api\/v?\d+$/, '');
+function stripApiVersion(base: string): string {
+  return base.replace(/\/api\/v?\d+$/, '');
 }
 
 /** Гарантирует, что путь начинается с / и не имеет trailing slash. */
-function normalizeAuthPath(path: string): string {
-  const trimmed = path.trim();
-  const withSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
-  return withSlash.replace(/\/+$/, '') || '/';
-}
-
-/** Гарантирует, что путь меню начинается с / и не имеет trailing slash. */
-function normalizeMenuPath(path: string): string {
+function normalizePath(path: string): string {
   const trimmed = path.trim();
   const withSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
   return withSlash.replace(/\/+$/, '') || '/';
@@ -792,18 +698,10 @@ function extractIikoErrorDescription(payload: unknown): string | undefined {
   return undefined;
 }
 
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-}
-
-function isDefined<T>(value: T | undefined | null): value is T {
-  return value !== undefined && value !== null;
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -821,61 +719,6 @@ function normalizeOrganization(value: unknown): IikoOrganization | undefined {
     restaurantAddress: optionalString(record?.restaurantAddress),
     isActive: typeof record?.isActive === 'boolean' ? record.isActive : undefined,
   };
-}
-
-function normalizeGroup(value: unknown): IikoProductGroupDto | undefined {
-  const record = asRecord(value);
-  const id = optionalString(record?.id);
-  if (!id) return undefined;
-  return {
-    id,
-    parentGroup: optionalString(record?.parentGroup) ?? null,
-    name: optionalString(record?.name) ?? 'Без названия',
-    isDeleted: typeof record?.isDeleted === 'boolean' ? record.isDeleted : false,
-  };
-}
-
-function normalizeProduct(value: unknown): IikoProductDto | undefined {
-  const record = asRecord(value);
-  const id = optionalString(record?.id);
-  if (!id) return undefined;
-
-  // Цена может приходить в sizePrices[].price.currentPrice либо в price.
-  let price: number | null = null;
-  const sizePrices = asArray(record?.sizePrices);
-  for (const sizePrice of sizePrices) {
-    const priceRecord = asRecord(asRecord(sizePrice)?.price);
-    const current = priceRecord?.currentPrice;
-    if (typeof current === 'number') {
-      price = current;
-      break;
-    }
-  }
-  if (price === null && typeof record?.price === 'number') {
-    price = record.price;
-  }
-
-  return {
-    id,
-    parentGroup: optionalString(record?.parentGroup) ?? null,
-    name: optionalString(record?.name) ?? 'Без названия',
-    description: optionalString(record?.description) ?? null,
-    code: optionalString(record?.code) ?? null,
-    type: optionalString(record?.type) ?? optionalString(record?.productCategoryId) ?? null,
-    measureUnit: optionalString(record?.measureUnit) ?? null,
-    price,
-    isDeleted: typeof record?.isDeleted === 'boolean' ? record.isDeleted : false,
-    imageLinks: asArray(record?.imageLinks).filter(
-      (item): item is string => typeof item === 'string',
-    ),
-  };
-}
-
-function normalizeIdName(value: unknown): { id: string; name: string } | undefined {
-  const record = asRecord(value);
-  const id = optionalString(record?.id);
-  if (!id) return undefined;
-  return { id, name: optionalString(record?.name) ?? 'Без названия' };
 }
 
 function isAppErrorLike(error: unknown): error is Error & { code: string; statusCode: number } {

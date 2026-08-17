@@ -1,10 +1,11 @@
-import type { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import type { AppEnv } from '../../config/env.js';
 import { notFound, organizationNotSelected, validationError } from '../../lib/errors.js';
 import { toMoney } from '../../lib/money.js';
 import type { AuditService } from '../../services/audit.service.js';
-import type { IikoClient, IikoNomenclature } from '../../services/iiko-client.service.js';
+import type { IikoClient } from '../../services/iiko-client.service.js';
 import type { TelegramService } from '../../services/telegram.service.js';
+import { parseExternalMenu } from './iiko-menu-parser.js';
 
 export interface SyncOrganizationsResult {
   fetched: number;
@@ -13,20 +14,32 @@ export interface SyncOrganizationsResult {
   selectedIikoOrganizationId: string | null;
 }
 
-export interface SyncMenuResult {
+export interface SyncMenuSummary {
   organizationId: string;
-  groups: number;
-  productsFetched: number;
-  productsCreated: number;
-  productsUpdated: number;
-  productsArchived: number;
-  revision: number | null;
-  stopListItems: number;
+  sourceExternalMenuId: string | null;
+  sourceMenuId: string | null;
+  correlationId: string | null;
+  categoryCount: number;
+  sourceItemCount: number;
+  variantsExtracted: number;
+  skippedNoSizes: number;
+  skippedHidden: number;
+  skippedZeroPrice: number;
+  skippedMalformedPrice: number;
+  savedOrUpdate: number;
+  unavailableCount: number;
+  durationMs: number;
+  success: boolean;
+  error: string | null;
 }
 
+const SYNC_BATCH_SIZE = 250;
+const NO_SIZE_FALLBACK = '__no_size__';
+
 /**
- * Синхронизация справочников iiko → PostgreSQL. Только чтение из iiko.
- * Пропавшие товары не удаляются, а помечаются ARCHIVED/неактивными.
+ * Синхронизация внешнего меню iiko → PostgreSQL. Только чтение из iiko.
+ * Пропавшие товары не удаляются, а помечаются недоступными (isAvailable=false).
+ * Сырое тело меню никогда не логируется и не возвращается — только сводка.
  */
 export class IikoSyncService {
   constructor(
@@ -162,159 +175,150 @@ export class IikoSyncService {
     return updated;
   }
 
-  async syncMenu(requestId?: string): Promise<SyncMenuResult> {
+  /**
+   * Синхронизация внешнего меню iiko (POST /api/2/menu).
+   * Извлекает sellable item-size-price variants, upsert их батчами,
+   * помечает пропавшие недоступными. Возвращает только сводку — без сырого меню.
+   */
+  async syncMenu(requestId?: string): Promise<SyncMenuSummary> {
+    const startedAt = Date.now();
     const organization = await this.prisma.organization.findFirst({ where: { isSelected: true } });
     if (!organization) throw organizationNotSelected();
 
-    let nomenclature: IikoNomenclature;
+    const externalMenuId = this.env.IIKO_EXTERNAL_MENU_ID;
+    if (!externalMenuId) {
+      throw validationError('Не задан IIKO_EXTERNAL_MENU_ID');
+    }
+
+    let rawMenu: unknown;
     try {
-      nomenclature = await this.iiko.getNomenclature(organization.iikoOrganizationId);
+      rawMenu = await this.iiko.getExternalMenu(organization.iikoOrganizationId, externalMenuId);
     } catch (error) {
+      const summary = this.buildFailureSummary(
+        organization.id,
+        null,
+        null,
+        Date.now() - startedAt,
+        error,
+      );
       await this.telegram.sendAlert(
         'IIKO_MENU_SYNC_FAILED',
         `⚠️ Bar Exchange: синхронизация меню не удалась для «${organization.name}».`,
       );
+      await this.recordSyncSummary(organization.id, summary, requestId);
       throw error;
     }
 
-    const groupNameById = new Map(nomenclature.groups.map((group) => [group.id, group.name]));
-    const groupPath = (groupId: string | null | undefined): string => {
-      const segments: string[] = [];
-      let current = groupId ?? null;
-      const guard = new Set<string>();
-      while (current && !guard.has(current)) {
-        guard.add(current);
-        const name = groupNameById.get(current);
-        if (!name) break;
-        segments.unshift(name);
-        current = nomenclature.groups.find((group) => group.id === current)?.parentGroup ?? null;
-      }
-      return segments.join(' / ');
-    };
-
-    for (const group of nomenclature.groups) {
-      await this.prisma.productGroup.upsert({
-        where: {
-          organizationId_iikoGroupId: {
-            organizationId: organization.id,
-            iikoGroupId: group.id,
-          },
-        },
-        create: {
-          organizationId: organization.id,
-          iikoGroupId: group.id,
-          parentIikoGroupId: group.parentGroup ?? null,
-          name: group.name,
-          path: groupPath(group.id),
-        },
-        update: {
-          parentIikoGroupId: group.parentGroup ?? null,
-          name: group.name,
-          path: groupPath(group.id),
-        },
-      });
-    }
-
-    const syncedAt = new Date();
-    let productsCreated = 0;
-    let productsUpdated = 0;
-    const seenIikoIds: string[] = [];
-
-    for (const product of nomenclature.products) {
-      if (product.isDeleted) continue;
-      seenIikoIds.push(product.id);
-      const knownPrice =
-        product.price === null || product.price === undefined ? null : toMoney(product.price);
-
-      const existing = await this.prisma.product.findUnique({
-        where: {
-          organizationId_iikoProductId: {
-            organizationId: organization.id,
-            iikoProductId: product.id,
-          },
-        },
-      });
-
-      const shared = {
-        iikoParentGroupId: product.parentGroup ?? null,
-        name: product.name,
-        description: product.description ?? null,
-        sku: product.code ?? null,
-        productType: product.type ?? null,
-        unit: product.measureUnit ?? null,
-        imageUrl: product.imageLinks?.[0] ?? null,
-        currentKnownIikoPrice: knownPrice?.toString() ?? null,
-        isActive: true,
-        status: 'ACTIVE' as const,
-        syncedAt,
-        metadata: {
-          iikoGroupPath: groupPath(product.parentGroup),
-        } satisfies Prisma.InputJsonValue,
-      };
-
-      if (existing) {
-        await this.prisma.product.update({
-          where: { id: existing.id },
-          data: {
-            ...shared,
-            // basePrice администратор настраивает вручную; перезаписываем только если он ещё нулевой.
-            basePrice:
-              existing.basePrice.isZero() && knownPrice ? knownPrice.toString() : undefined,
-          },
-        });
-        productsUpdated += 1;
-      } else {
-        await this.prisma.product.create({
-          data: {
-            organizationId: organization.id,
-            iikoProductId: product.id,
-            basePrice: (knownPrice ?? toMoney(0)).toString(),
-            priceStep: this.env.PRICE_DEFAULT_STEP.toString(),
-            maxChangePercent: this.env.PRICE_MAX_CHANGE_PERCENT.toString(),
-            ...shared,
-          },
-        });
-        productsCreated += 1;
-      }
-    }
-
-    // Пропавшие в iiko товары не удаляем — архивируем.
-    const archived = await this.prisma.product.updateMany({
-      where: {
-        organizationId: organization.id,
-        iikoProductId: { notIn: seenIikoIds.length > 0 ? seenIikoIds : ['__none__'] },
-        status: { not: 'ARCHIVED' },
-      },
-      data: { status: 'ARCHIVED', isActive: false },
+    const parsed = parseExternalMenu(rawMenu, {
+      organizationId: organization.iikoOrganizationId,
+      externalMenuId,
+      currency: 'KZT',
     });
 
-    let stopListItems = 0;
-    try {
-      const stopList = await this.iiko.getStopList(organization.iikoOrganizationId);
-      stopListItems = stopList.length;
-      if (stopList.length > 0) {
-        await this.prisma.product.updateMany({
+    const syncedAt = new Date();
+    const seenKeys = new Set<string>();
+    let savedOrUpdate = 0;
+
+    // Upsert батчами без одной гигантской транзакции.
+    for (let i = 0; i < parsed.variants.length; i += SYNC_BATCH_SIZE) {
+      const batch = parsed.variants.slice(i, i + SYNC_BATCH_SIZE);
+      for (const variant of batch) {
+        const key = `${variant.organizationId}|${variant.iikoItemId}|${variant.iikoSizeId}`;
+        seenKeys.add(key);
+        const basePrice = toMoney(variant.basePrice.toString());
+        const upsertData = {
+          iikoSizeId: variant.iikoSizeId,
+          iikoProductId: variant.iikoProductId,
+          name: variant.name,
+          displayName: variant.displayName,
+          sizeName: variant.sizeName,
+          sizeCode: variant.sizeCode,
+          sku: variant.sku,
+          categoryId: variant.categoryId,
+          categoryName: variant.categoryName,
+          basePrice: basePrice.toString(),
+          currentKnownIikoPrice: basePrice.toString(),
+          currency: variant.currency,
+          isSellable: variant.isSellable,
+          isAvailable: true,
+          isActive: true,
+          status: 'ACTIVE' as const,
+          sourceMenuId: parsed.sourceMenuId,
+          sourceExternalMenuId: parsed.sourceExternalMenuId,
+          sourceMetadata: variant.sourceMetadata as Prisma.InputJsonValue,
+          syncWarnings: variant.syncWarnings.length
+            ? (variant.syncWarnings as unknown as Prisma.InputJsonValue)
+            : Prisma.JsonNull,
+          lastSeenAt: syncedAt,
+          syncedAt,
+        };
+        await this.prisma.product.upsert({
           where: {
-            organizationId: organization.id,
-            iikoProductId: { in: stopList.map((item) => item.productId) },
+            organizationId_iikoItemId_iikoSizeId: {
+              organizationId: organization.id,
+              iikoItemId: variant.iikoItemId,
+              iikoSizeId: variant.iikoSizeId,
+            },
           },
-          data: { status: 'STOPPED' },
+          create: {
+            organizationId: organization.id,
+            iikoItemId: variant.iikoItemId,
+            priceStep: this.env.PRICE_DEFAULT_STEP.toString(),
+            maxChangePercent: this.env.PRICE_MAX_CHANGE_PERCENT.toString(),
+            ...upsertData,
+          },
+          update: {
+            ...upsertData,
+            // basePrice администратор настраивает вручную; перезаписываем только если он ещё нулевой.
+            basePrice: undefined,
+          },
         });
+        savedOrUpdate += 1;
       }
-    } catch {
-      // Стоп-лист не критичен для v0.1: продолжаем без него.
-      stopListItems = 0;
     }
 
-    const result: SyncMenuResult = {
+    // Пропавшие варианты этой организации/меню помечаем недоступными.
+    // Не удаляем — сохраняем lastSeenAt. Совпадение по полному ключу
+    // (iikoItemId + iikoSizeId): если у товара исчез один размер, но другой
+    // остался — исчезнувший размер помечается недоступным, а оставшийся — нет.
+    const existingAvailable = await this.prisma.product.findMany({
+      where: {
+        organizationId: organization.id,
+        isAvailable: true,
+        OR: [{ sourceExternalMenuId: externalMenuId }, { sourceExternalMenuId: null }],
+      },
+      select: { id: true, iikoItemId: true, iikoSizeId: true },
+    });
+    const goneIds: string[] = [];
+    for (const row of existingAvailable) {
+      const key = `${organization.iikoOrganizationId}|${row.iikoItemId}|${row.iikoSizeId ?? NO_SIZE_FALLBACK}`;
+      if (!seenKeys.has(key)) goneIds.push(row.id);
+    }
+    const unavailable =
+      goneIds.length > 0
+        ? await this.prisma.product.updateMany({
+            where: { id: { in: goneIds } },
+            data: { isAvailable: false, isActive: false, status: 'INACTIVE' },
+          })
+        : { count: 0 };
+
+    const summary: SyncMenuSummary = {
       organizationId: organization.id,
-      groups: nomenclature.groups.length,
-      productsFetched: nomenclature.products.length,
-      productsCreated,
-      productsUpdated,
-      productsArchived: archived.count,
-      revision: nomenclature.revision ?? null,
-      stopListItems,
+      sourceExternalMenuId: parsed.sourceExternalMenuId,
+      sourceMenuId: parsed.sourceMenuId,
+      correlationId: parsed.correlationId,
+      categoryCount: parsed.categoryCount,
+      sourceItemCount: parsed.sourceItemCount,
+      variantsExtracted: parsed.variants.length,
+      skippedNoSizes: parsed.skippedNoSizes,
+      skippedHidden: parsed.skippedHidden,
+      skippedZeroPrice: parsed.skippedZeroPrice,
+      skippedMalformedPrice: parsed.skippedMalformedPrice,
+      savedOrUpdate,
+      unavailableCount: unavailable.count,
+      durationMs: Date.now() - startedAt,
+      success: true,
+      error: null,
     };
 
     await this.prisma.appSetting.upsert({
@@ -322,17 +326,76 @@ export class IikoSyncService {
       create: { key: 'iiko.lastMenuSyncAt', value: syncedAt.toISOString() },
       update: { value: syncedAt.toISOString() },
     });
+    await this.prisma.appSetting.upsert({
+      where: { key: 'iiko.lastMenuSyncSummary' },
+      create: { key: 'iiko.lastMenuSyncSummary', value: summary as unknown as Prisma.InputJsonValue },
+      update: { value: summary as unknown as Prisma.InputJsonValue },
+    });
+
+    await this.recordSyncSummary(organization.id, summary, requestId);
+    return summary;
+  }
+
+  private buildFailureSummary(
+    organizationId: string,
+    externalMenuId: string | null,
+    correlationId: string | null,
+    durationMs: number,
+    error: unknown,
+  ): SyncMenuSummary {
+    const message =
+      error instanceof Error ? error.message : typeof error === 'string' ? error : 'unknown error';
+    return {
+      organizationId,
+      sourceExternalMenuId: externalMenuId,
+      sourceMenuId: null,
+      correlationId,
+      categoryCount: 0,
+      sourceItemCount: 0,
+      variantsExtracted: 0,
+      skippedNoSizes: 0,
+      skippedHidden: 0,
+      skippedZeroPrice: 0,
+      skippedMalformedPrice: 0,
+      savedOrUpdate: 0,
+      unavailableCount: 0,
+      durationMs,
+      success: false,
+      error: message.slice(0, 500),
+    };
+  }
+
+  private async recordSyncSummary(
+    organizationId: string,
+    summary: SyncMenuSummary,
+    requestId?: string,
+  ): Promise<void> {
+    // Сводка без сырого тела меню.
+    const safeMetadata = {
+      sourceItemCount: summary.sourceItemCount,
+      categoryCount: summary.categoryCount,
+      variantsExtracted: summary.variantsExtracted,
+      skippedNoSizes: summary.skippedNoSizes,
+      skippedHidden: summary.skippedHidden,
+      skippedZeroPrice: summary.skippedZeroPrice,
+      skippedMalformedPrice: summary.skippedMalformedPrice,
+      savedOrUpdate: summary.savedOrUpdate,
+      unavailableCount: summary.unavailableCount,
+      durationMs: summary.durationMs,
+      correlationId: summary.correlationId,
+      success: summary.success,
+    } satisfies Prisma.InputJsonValue;
 
     await this.audit.log({
       action: 'IIKO_MENU_SYNC',
       actorType: 'ADMIN',
-      organizationId: organization.id,
+      organizationId,
       requestId: requestId ?? null,
-      summary: `Синхронизация меню: ${result.productsFetched} товаров, ${result.groups} групп`,
-      metadata: { ...result },
+      summary: summary.success
+        ? `Синхронизация меню: ${summary.variantsExtracted} вариантов, ${summary.sourceItemCount} товаров, ${summary.categoryCount} категорий`
+        : `Синхронизация меню не удалась: ${summary.error ?? 'ошибка'}`,
+      metadata: safeMetadata,
     });
-
-    return result;
   }
 
   async getLastMenuSyncAt(): Promise<string | null> {
@@ -340,6 +403,14 @@ export class IikoSyncService {
       where: { key: 'iiko.lastMenuSyncAt' },
     });
     return typeof setting?.value === 'string' ? setting.value : null;
+  }
+
+  async getLastMenuSyncSummary(): Promise<SyncMenuSummary | null> {
+    const setting = await this.prisma.appSetting.findUnique({
+      where: { key: 'iiko.lastMenuSyncSummary' },
+    });
+    if (!setting || typeof setting.value !== 'object' || setting.value === null) return null;
+    return setting.value as unknown as SyncMenuSummary;
   }
 
   assertOrganizationMatches(iikoOrganizationId: string, selectedIikoOrganizationId: string): void {

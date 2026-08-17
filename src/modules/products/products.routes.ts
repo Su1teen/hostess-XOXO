@@ -4,12 +4,14 @@ import { API_PREFIX, CURRENCY } from '../../config/constants.js';
 import { shortId } from '../../lib/redaction.js';
 
 interface ProductQuery {
+  page?: number;
+  pageSize?: number;
   search?: string;
-  group?: string;
-  activeOnly?: boolean;
+  category?: string;
+  sellableOnly?: boolean;
   exchangeOnly?: boolean;
-  limit?: number;
-  offset?: number;
+  activeOnly?: boolean;
+  availableOnly?: boolean;
 }
 
 interface ProductPatchBody {
@@ -29,30 +31,70 @@ export async function productsRoutes(app: FastifyInstance): Promise<void> {
       preHandler: app.requireAdmin,
       schema: {
         tags: ['Products'],
-        summary: 'Поиск товаров (русский и английский текст)',
+        summary: 'Постраничный список товаров (макс 100 на страницу)',
         security: [{ adminApiKey: [] }],
         querystring: {
           type: 'object',
           additionalProperties: false,
           properties: {
+            page: { type: 'integer', minimum: 1, default: 1 },
+            pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
             search: { type: 'string' },
-            group: { type: 'string' },
-            activeOnly: { type: 'boolean', default: false },
+            category: { type: 'string' },
+            sellableOnly: { type: 'boolean', default: true },
             exchangeOnly: { type: 'boolean', default: false },
-            limit: { type: 'integer', minimum: 1, maximum: 500, default: 50 },
-            offset: { type: 'integer', minimum: 0, default: 0 },
+            activeOnly: { type: 'boolean', default: true },
+            availableOnly: { type: 'boolean', default: true },
           },
         },
       },
     },
     async (request) => {
-      const result = await app.services.products.search(request.query);
+      const result = await app.services.products.list(request.query);
       return {
-        total: result.total,
-        limit: result.limit,
-        offset: result.offset,
-        items: result.items.map(serializeProduct),
+        data: result.items.map(serializeProduct),
+        pagination: {
+          page: result.page,
+          pageSize: result.pageSize,
+          total: result.total,
+          totalPages: result.totalPages,
+        },
+        filters: {
+          search: request.query.search ?? null,
+          category: request.query.category ?? null,
+          sellableOnly: request.query.sellableOnly ?? true,
+          exchangeOnly: request.query.exchangeOnly ?? false,
+          activeOnly: request.query.activeOnly ?? true,
+          availableOnly: request.query.availableOnly ?? true,
+        },
       };
+    },
+  );
+
+  app.get<{ Querystring: { sellableOnly?: boolean; availableOnly?: boolean } }>(
+    `${API_PREFIX}/admin/products/categories`,
+    {
+      preHandler: app.requireAdmin,
+      schema: {
+        tags: ['Products'],
+        summary: 'Категории с количеством sellable+available вариантов',
+        security: [{ adminApiKey: [] }],
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            sellableOnly: { type: 'boolean', default: true },
+            availableOnly: { type: 'boolean', default: true },
+          },
+        },
+      },
+    },
+    async (request) => {
+      const items = await app.services.products.listCategories({
+        sellableOnly: request.query.sellableOnly,
+        availableOnly: request.query.availableOnly,
+      });
+      return { items };
     },
   );
 
@@ -106,7 +148,7 @@ export async function productsRoutes(app: FastifyInstance): Promise<void> {
       preHandler: app.requireAdmin,
       schema: {
         tags: ['Products'],
-        summary: 'Добавить товар на биржу',
+        summary: 'Добавить товар на биржу (требует min/max/step и basePrice)',
         security: [{ adminApiKey: [] }],
         params: idParamSchema,
       },
@@ -153,19 +195,19 @@ const idParamSchema = {
 } as const;
 
 function serializeProduct(product: Product) {
-  const groupPath =
-    product.metadata && typeof product.metadata === 'object' && !Array.isArray(product.metadata)
-      ? (product.metadata as Record<string, unknown>).iikoGroupPath
-      : null;
-
   return {
     id: product.id,
     name: product.name,
+    displayName: product.displayName,
+    sizeName: product.sizeName,
+    sizeCode: product.sizeCode,
+    iikoItemId: product.iikoItemId,
+    iikoSizeId: product.iikoSizeId,
     iikoProductId: product.iikoProductId,
-    iikoProductIdShort: shortId(product.iikoProductId),
-    group: typeof groupPath === 'string' ? groupPath : null,
-    unit: product.unit,
-    currency: CURRENCY,
+    iikoProductIdShort: shortId(product.iikoProductId ?? product.iikoItemId),
+    sku: product.sku,
+    categoryName: product.categoryName,
+    currency: product.currency ?? CURRENCY,
     basePrice: Number(product.basePrice.toString()),
     currentKnownIikoPrice:
       product.currentKnownIikoPrice === null
@@ -179,6 +221,8 @@ function serializeProduct(product: Product) {
     maxPrice: product.maxPrice === null ? null : Number(product.maxPrice.toString()),
     priceStep: Number(product.priceStep.toString()),
     maxChangePercent: Number(product.maxChangePercent.toString()),
+    isSellable: product.isSellable,
+    isAvailable: product.isAvailable,
     isExchangeProduct: product.isExchangeProduct,
     isActive: product.isActive,
     status: product.status,

@@ -71,14 +71,8 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const product = extracted.productId
-        ? await app.prisma.product.findUnique({
-            where: {
-              organizationId_iikoProductId: {
-                organizationId: organization.id,
-                iikoProductId: extracted.productId,
-              },
-            },
-          })
+        ? await app.services.products.findByIikoItemId(organization.id, extracted.productId) ??
+          await app.services.products.findByIikoProductId(organization.id, extracted.productId)
         : null;
 
       await app.prisma.salesEvent.create({

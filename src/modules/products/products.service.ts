@@ -1,15 +1,25 @@
 import type { Prisma, Product, PrismaClient } from '@prisma/client';
-import { notFound, validationError } from '../../lib/errors.js';
+import { conflict, notFound, validationError } from '../../lib/errors.js';
 import { toMoney } from '../../lib/money.js';
 import type { AuditService } from '../../services/audit.service.js';
 
-export interface ProductSearchParams {
+export interface ProductListParams {
+  page?: number;
+  pageSize?: number;
   search?: string;
-  group?: string;
-  activeOnly?: boolean;
+  category?: string;
+  sellableOnly?: boolean;
   exchangeOnly?: boolean;
-  limit?: number;
-  offset?: number;
+  activeOnly?: boolean;
+  availableOnly?: boolean;
+}
+
+export interface ProductListResult {
+  items: Product[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
 }
 
 export interface ProductUpdateInput {
@@ -22,47 +32,64 @@ export interface ProductUpdateInput {
   currentExchangePrice?: number | null;
 }
 
+const MAX_PAGE_SIZE = 100;
+const DEFAULT_PAGE_SIZE = 50;
+
 export class ProductsService {
   constructor(
     private readonly prisma: PrismaClient,
     private readonly audit: AuditService,
   ) {}
 
-  /** Поиск поддерживает русский и английский текст (case-insensitive). */
-  async search(params: ProductSearchParams) {
-    const limit = Math.min(Math.max(params.limit ?? 50, 1), 500);
-    const offset = Math.max(params.offset ?? 0, 0);
+  /** Постраничный список товаров с фильтрами. Максимум 100 строк на страницу. */
+  async list(params: ProductListParams): Promise<ProductListResult> {
+    const page = Math.max(params.page ?? 1, 1);
+    const pageSize = Math.min(Math.max(params.pageSize ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+    const offset = (page - 1) * pageSize;
 
     const where: Prisma.ProductWhereInput = {};
     if (params.search && params.search.trim().length > 0) {
       const term = params.search.trim();
       where.OR = [
         { name: { contains: term, mode: 'insensitive' } },
-        { description: { contains: term, mode: 'insensitive' } },
+        { displayName: { contains: term, mode: 'insensitive' } },
         { sku: { contains: term, mode: 'insensitive' } },
+        { categoryName: { contains: term, mode: 'insensitive' } },
       ];
     }
-    if (params.group) {
-      where.iikoParentGroupId = params.group;
+    if (params.category && params.category.trim().length > 0) {
+      where.categoryName = params.category.trim();
     }
-    if (params.activeOnly) {
-      where.isActive = true;
+    if (params.sellableOnly ?? true) {
+      where.isSellable = true;
     }
     if (params.exchangeOnly) {
       where.isExchangeProduct = true;
+    }
+    if (params.activeOnly ?? true) {
+      where.isActive = true;
+    }
+    if (params.availableOnly ?? true) {
+      where.isAvailable = true;
     }
 
     const [items, total] = await Promise.all([
       this.prisma.product.findMany({
         where,
-        orderBy: [{ isExchangeProduct: 'desc' }, { name: 'asc' }],
-        take: limit,
+        orderBy: [{ isExchangeProduct: 'desc' }, { displayName: 'asc' }],
+        take: pageSize,
         skip: offset,
       }),
       this.prisma.product.count({ where }),
     ]);
 
-    return { items, total, limit, offset };
+    return {
+      items,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.max(Math.ceil(total / pageSize), 1),
+    };
   }
 
   async getById(id: string): Promise<Product> {
@@ -132,13 +159,18 @@ export class ProductsService {
       entityType: 'Product',
       entityId: updated.id,
       requestId: requestId ?? null,
-      summary: `Обновлены настройки товара «${updated.name}»`,
+      summary: `Обновлены настройки товара «${updated.displayName}»`,
       metadata: { fields: Object.keys(input) },
     });
 
     return updated;
   }
 
+  /**
+   * Добавление/удаление товара на биржу.
+   * При выборе требует sellable+available, basePrice>0 и заданные min/max/step,
+   * а также minPrice <= basePrice <= maxPrice. Не позволяет выбрать дважды.
+   */
   async setExchangeSelection(
     id: string,
     selected: boolean,
@@ -146,10 +178,33 @@ export class ProductsService {
     requestId?: string,
   ): Promise<Product> {
     const product = await this.getById(id);
-    if (selected && product.basePrice.lte(0)) {
-      throw validationError(
-        'Нельзя добавить товар на биржу без basePrice > 0. Сначала задайте базовую цену.',
-      );
+
+    if (selected) {
+      if (product.isExchangeProduct) {
+        throw conflict('Товар уже выбран для биржи');
+      }
+      if (!product.isSellable || !product.isAvailable) {
+        throw validationError('Товар не является sellable/доступным вариантом');
+      }
+      if (product.basePrice.lte(0)) {
+        throw validationError(
+          'Нельзя добавить товар на биржу без basePrice > 0. Сначала задайте базовую цену.',
+        );
+      }
+      if (product.minPrice === null || product.maxPrice === null || product.priceStep === null) {
+        throw validationError(
+          'Для выбора на биржу должны быть заданы minPrice, maxPrice и priceStep.',
+        );
+      }
+      const base = toMoney(product.basePrice.toString());
+      const min = toMoney(product.minPrice.toString());
+      const max = toMoney(product.maxPrice.toString());
+      if (min.gt(base)) {
+        throw validationError('minPrice не может быть больше basePrice');
+      }
+      if (base.gt(max)) {
+        throw validationError('basePrice не может быть больше maxPrice');
+      }
     }
 
     const updated = await this.prisma.product.update({
@@ -172,28 +227,64 @@ export class ProductsService {
       entityId: updated.id,
       requestId: requestId ?? null,
       summary: selected
-        ? `Товар «${updated.name}» добавлен на биржу`
-        : `Товар «${updated.name}» убран с биржи`,
+        ? `Товар «${updated.displayName}» добавлен на биржу`
+        : `Товар «${updated.displayName}» убран с биржи`,
     });
 
     return updated;
   }
 
   async counts() {
-    const [total, exchange, active] = await Promise.all([
+    const [total, exchange, active, sellable, available] = await Promise.all([
       this.prisma.product.count(),
       this.prisma.product.count({ where: { isExchangeProduct: true } }),
       this.prisma.product.count({ where: { isActive: true } }),
+      this.prisma.product.count({ where: { isSellable: true } }),
+      this.prisma.product.count({ where: { isAvailable: true } }),
     ]);
-    return { total, exchange, active };
+    return { total, exchange, active, sellable, available };
   }
 
-  async listGroups(organizationId?: string) {
-    return this.prisma.productGroup.findMany({
-      where: organizationId ? { organizationId } : undefined,
-      orderBy: { path: 'asc' },
-      select: { iikoGroupId: true, name: true, path: true },
-      take: 500,
+  /** Категории с количеством sellable+available вариантов. */
+  async listCategories(params: { sellableOnly?: boolean; availableOnly?: boolean } = {}) {
+    const where: Prisma.ProductWhereInput = {
+      categoryName: { not: null },
+    };
+    if (params.sellableOnly ?? true) where.isSellable = true;
+    if (params.availableOnly ?? true) where.isAvailable = true;
+
+    const rows = await this.prisma.product.groupBy({
+      by: ['categoryName'],
+      where,
+      _count: { _all: true },
+      orderBy: { categoryName: 'asc' },
+    });
+    return rows
+      .filter((row): row is (typeof rows)[number] & { categoryName: string } =>
+        Boolean(row.categoryName),
+      )
+      .map((row) => ({ name: row.categoryName, count: row._count._all }));
+  }
+
+  /** Поиск продукта по iikoItemId (для webhooks/front-plugin). */
+  async findByIikoItemId(
+    organizationId: string,
+    iikoItemId: string,
+  ): Promise<Product | null> {
+    return this.prisma.product.findFirst({
+      where: { organizationId, iikoItemId, isSellable: true, isAvailable: true },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  /** Fallback-поиск по iikoProductId, если itemId недоступен. */
+  async findByIikoProductId(
+    organizationId: string,
+    iikoProductId: string,
+  ): Promise<Product | null> {
+    return this.prisma.product.findFirst({
+      where: { organizationId, iikoProductId, isSellable: true, isAvailable: true },
+      orderBy: { createdAt: 'asc' },
     });
   }
 }

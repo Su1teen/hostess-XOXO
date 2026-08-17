@@ -78,14 +78,9 @@ export async function frontPluginRoutes(app: FastifyInstance): Promise<void> {
           ...payload,
         });
 
-      const product = await app.prisma.product.findUnique({
-        where: {
-          organizationId_iikoProductId: {
-            organizationId: organization.id,
-            iikoProductId: productId,
-          },
-        },
-      });
+      const product =
+        (await app.services.products.findByIikoItemId(organization.id, productId)) ??
+        (await app.services.products.findByIikoProductId(organization.id, productId));
 
       await app.services.audit.log({
         action: 'PLUGIN_QUOTE_REQUESTED',

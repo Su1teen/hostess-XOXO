@@ -44,7 +44,12 @@ export const envSchema = z
 
     CORS_ORIGINS: csvList,
 
-    IIKO_API_BASE_URL: z.string().url().default('https://api-ru.iiko.services/api/v2'),
+    // Auth и menu используют РАЗНЫЕ базы iiko Cloud API:
+    //   auth:  POST {IIKO_AUTH_BASE_URL}{IIKO_AUTH_PATH}  -> /api/v2/access_token
+    //   menu:  POST {IIKO_MENU_BASE_URL}{IIKO_MENU_PATH}  -> /api/2/menu
+    // Не использовать общий IIKO_API_BASE_URL для обеих операций.
+    IIKO_AUTH_BASE_URL: z.string().url().default('https://api-ru.iiko.services/api/v2'),
+    IIKO_MENU_BASE_URL: z.string().url().default('https://api-ru.iiko.services/api/2'),
     IIKO_API_KEY: optionalString,
     IIKO_APP_ID: optionalString,
     IIKO_CLIENT_SECRET: optionalString,

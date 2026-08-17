@@ -40,7 +40,8 @@ export function createServices(
   });
 
   const iikoClient = new IikoClient({
-    baseUrl: env.IIKO_API_BASE_URL,
+    authBaseUrl: env.IIKO_AUTH_BASE_URL,
+    menuBaseUrl: env.IIKO_MENU_BASE_URL,
     apiKey: env.IIKO_API_KEY,
     appId: env.IIKO_APP_ID,
     clientSecret: env.IIKO_CLIENT_SECRET,

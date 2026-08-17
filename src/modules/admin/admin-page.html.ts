@@ -140,26 +140,48 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         </div>
 
         <div class="card">
+          <h2>Сводка последней синхронизации меню</h2>
+          <table id="syncSummaryTable">
+            <tbody>
+              <tr><td class="muted" colspan="2">Нет данных — выполните синхронизацию меню.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
           <h2>Товары биржи</h2>
           <div class="row">
             <div>
-              <label for="search">Поиск (рус/eng)</label>
+              <label for="search">Поиск (название, размер, SKU, категория)</label>
               <input id="search" type="text" placeholder="Например: джин" />
+            </div>
+            <div>
+              <label for="categorySelect">Категория</label>
+              <select id="categorySelect"><option value="">— все категории —</option></select>
             </div>
             <div style="flex: 0 0 auto">
               <button id="btnSearch">Найти</button>
               <button id="btnExchange" class="secondary">Только биржевые</button>
+              <button id="btnResetFilters" class="secondary">Сбросить</button>
             </div>
           </div>
-          <div style="max-height: 320px; overflow: auto">
-            <table id="productsTable">
-              <thead>
-                <tr><th>Товар</th><th>Цена</th><th>Биржа</th><th></th></tr>
-              </thead>
-              <tbody>
-                <tr><td class="muted" colspan="4">Нет данных.</td></tr>
-              </tbody>
-            </table>
+          <table id="productsTable">
+            <thead>
+              <tr>
+                <th>Товар</th><th>Размер</th><th>SKU</th><th>Категория</th>
+                <th>Цена</th><th>Доступен</th><th>Биржа</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td class="muted" colspan="8">Нет данных.</td></tr>
+            </tbody>
+          </table>
+          <div class="row" style="margin-top: 8px; align-items: center">
+            <div style="flex: 0 0 auto">
+              <button id="btnPrevPage" class="secondary">← Назад</button>
+              <span id="pageInfo" class="muted">стр. 1 / 1</span>
+              <button id="btnNextPage" class="secondary">Вперёд →</button>
+            </div>
           </div>
         </div>
 
@@ -297,12 +319,17 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
 
         function renderDiagnostics(data) {
           renderStatus(data);
+          if (data.sync && data.sync.lastSummary) {
+            renderSyncSummary(data.sync.lastSummary);
+          }
         }
+
+        var productsState = { page: 1, pageSize: 50, exchangeOnly: false };
 
         function renderProducts(items) {
           var tbody = el('productsTable').querySelector('tbody');
           if (!items || items.length === 0) {
-            tbody.innerHTML = '<tr><td class="muted" colspan="4">Ничего не найдено.</td></tr>';
+            tbody.innerHTML = '<tr><td class="muted" colspan="8">Ничего не найдено.</td></tr>';
             return;
           }
           tbody.innerHTML = items
@@ -310,25 +337,93 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
               var price = item.currentExchangePrice !== null && item.currentExchangePrice !== undefined
                 ? item.currentExchangePrice
                 : item.basePrice;
+              var avail = item.isAvailable
+                ? '<span class="status ok">да</span>'
+                : '<span class="status err">нет</span>';
               var action = item.isExchangeProduct
-                ? '<button class="secondary" data-remove="' + item.id + '">Убрать</button>'
-                : '<button data-select="' + item.id + '">На биржу</button>';
+                ? '<button class="secondary" data-remove="' + item.id + '">Убрать из биржи</button>'
+                : '<button data-select="' + item.id + '">Добавить в биржу</button>';
               return (
-                '<tr><td>' + escapeHtml(item.name) + '</td><td>' + escapeHtml(price) + ' ₸</td>' +
-                '<td>' + (item.isExchangeProduct ? 'да' : 'нет') + '</td><td>' + action + '</td></tr>'
+                '<tr><td>' + escapeHtml(item.displayName || item.name) + '</td>' +
+                '<td>' + escapeHtml(item.sizeName || '—') + '</td>' +
+                '<td>' + escapeHtml(item.sku || '—') + '</td>' +
+                '<td>' + escapeHtml(item.categoryName || '—') + '</td>' +
+                '<td>' + escapeHtml(price) + ' ₸</td>' +
+                '<td>' + avail + '</td>' +
+                '<td>' + (item.isExchangeProduct ? 'да' : 'нет') + '</td>' +
+                '<td>' + action + '</td></tr>'
               );
             })
             .join('');
         }
 
-        function loadProducts(exchangeOnly) {
+        function renderPagination(pagination) {
+          el('pageInfo').textContent =
+            'стр. ' + pagination.page + ' / ' + pagination.totalPages +
+            ' (всего ' + pagination.total + ')';
+          el('btnPrevPage').disabled = pagination.page <= 1;
+          el('btnNextPage').disabled = pagination.page >= pagination.totalPages;
+        }
+
+        function loadProducts() {
           var params = new URLSearchParams();
-          params.set('limit', '50');
+          params.set('page', String(productsState.page));
+          params.set('pageSize', String(productsState.pageSize));
+          params.set('sellableOnly', 'true');
+          params.set('availableOnly', 'true');
+          params.set('activeOnly', 'true');
           if (el('search').value.trim()) { params.set('search', el('search').value.trim()); }
-          if (exchangeOnly) { params.set('exchangeOnly', 'true'); }
+          var cat = el('categorySelect').value;
+          if (cat) { params.set('category', cat); }
+          if (productsState.exchangeOnly) { params.set('exchangeOnly', 'true'); }
           return request('GET', '/api/v1/admin/products?' + params.toString()).then(function (data) {
-            renderProducts(data.items);
+            renderProducts(data.data);
+            renderPagination(data.pagination);
           });
+        }
+
+        function loadCategories() {
+          return request('GET', '/api/v1/admin/products/categories').then(function (data) {
+            var select = el('categorySelect');
+            var items = data.items || [];
+            var current = select.value;
+            select.innerHTML = '<option value="">— все категории —</option>' +
+              items
+                .map(function (item) {
+                  return '<option value="' + escapeHtml(item.name) + '">' +
+                    escapeHtml(item.name) + ' (' + item.count + ')</option>';
+                })
+                .join('');
+            if (current) { select.value = current; }
+          });
+        }
+
+        function renderSyncSummary(data) {
+          var tbody = el('syncSummaryTable').querySelector('tbody');
+          if (!data) {
+            tbody.innerHTML = '<tr><td class="muted" colspan="2">Сводка недоступна.</td></tr>';
+            return;
+          }
+          var rows = [
+            ['Успех', data.success ? '<span class="status ok">да</span>' : '<span class="status err">нет</span>'],
+            ['Категорий в источнике', data.categoryCount],
+            ['Товаров в источнике', data.sourceItemCount],
+            ['Sellable вариантов извлечено', data.variantsExtracted],
+            ['Сохранено/обновлено', data.savedOrUpdate],
+            ['Пропущено без размеров', data.skippedNoSizes],
+            ['Пропущено hidden', data.skippedHidden],
+            ['Пропущено нулевая цена', data.skippedZeroPrice],
+            ['Пропущено битая цена', data.skippedMalformedPrice],
+            ['Помечено недоступными', data.unavailableCount],
+            ['correlationId', data.correlationId || '—'],
+            ['Длительность, мс', data.durationMs],
+            ['Ошибка', data.error || '—'],
+          ];
+          tbody.innerHTML = rows
+            .map(function (row) {
+              return '<tr><th>' + escapeHtml(row[0]) + '</th><td>' + row[1] + '</td></tr>';
+            })
+            .join('');
         }
 
         function renderRounds(items) {
@@ -473,7 +568,12 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           silent(request('POST', '/api/v1/admin/iiko/sync-organizations').then(loadOrganizations));
         });
         el('btnIikoMenu').addEventListener('click', function () {
-          silent(request('POST', '/api/v1/admin/iiko/sync-menu').then(function () { return loadProducts(false); }));
+          silent(
+            request('POST', '/api/v1/admin/iiko/sync-menu').then(function (summary) {
+              renderSyncSummary(summary);
+              return Promise.all([loadCategories(), loadProducts()]);
+            }),
+          );
         });
         el('btnSelectOrg').addEventListener('click', function () {
           var value = el('orgSelect').value;
@@ -481,8 +581,36 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           silent(request('POST', '/api/v1/admin/iiko/select-organization', { iikoOrganizationId: value })
             .then(loadDiagnostics));
         });
-        el('btnSearch').addEventListener('click', function () { silent(loadProducts(false)); });
-        el('btnExchange').addEventListener('click', function () { silent(loadProducts(true)); });
+        el('btnSearch').addEventListener('click', function () {
+          productsState.page = 1;
+          silent(loadProducts());
+        });
+        el('btnExchange').addEventListener('click', function () {
+          productsState.exchangeOnly = !productsState.exchangeOnly;
+          productsState.page = 1;
+          silent(loadProducts());
+        });
+        el('btnResetFilters').addEventListener('click', function () {
+          el('search').value = '';
+          el('categorySelect').value = '';
+          productsState.exchangeOnly = false;
+          productsState.page = 1;
+          silent(loadProducts());
+        });
+        el('categorySelect').addEventListener('change', function () {
+          productsState.page = 1;
+          silent(loadProducts());
+        });
+        el('btnPrevPage').addEventListener('click', function () {
+          if (productsState.page > 1) {
+            productsState.page -= 1;
+            silent(loadProducts());
+          }
+        });
+        el('btnNextPage').addEventListener('click', function () {
+          productsState.page += 1;
+          silent(loadProducts());
+        });
         el('btnSimulate').addEventListener('click', function () {
           silent(request('POST', '/api/v1/admin/rounds/simulate', {}).then(loadRounds));
         });
@@ -497,10 +625,10 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           var data = target.dataset;
           if (data.select) {
             silent(request('POST', '/api/v1/admin/products/' + data.select + '/select-for-exchange')
-              .then(function () { return loadProducts(false); }));
+              .then(function () { return loadProducts(); }));
           } else if (data.remove) {
             silent(request('POST', '/api/v1/admin/products/' + data.remove + '/remove-from-exchange')
-              .then(function () { return loadProducts(false); }));
+              .then(function () { return loadProducts(); }));
           } else if (data.round) {
             silent(request('GET', '/api/v1/admin/rounds/' + data.round));
           } else if (data.approve) {
@@ -512,7 +640,11 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           }
         });
 
-        if (saved) { silent(loadDiagnostics()); }
+        if (saved) {
+          silent(loadDiagnostics().then(function () {
+            return Promise.all([loadCategories(), loadProducts()]);
+          }));
+        }
       })();
     </script>
   </body>

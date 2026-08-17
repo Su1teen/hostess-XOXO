@@ -78,7 +78,6 @@ model Organization {
   createdAt           DateTime           @default(now()) @map("created_at")
   updatedAt           DateTime           @updatedAt @map("updated_at")
 
-  productGroups     ProductGroup[]
   products          Product[]
   priceRounds       PriceRound[]
   salesEvents       SalesEvent[]
@@ -88,33 +87,25 @@ model Organization {
   @@map("organizations")
 }
 
-model ProductGroup {
-  id                String   @id @default(uuid()) @db.Uuid
-  iikoGroupId       String?  @map("iiko_group_id")
-  organizationId    String   @map("organization_id") @db.Uuid
-  parentIikoGroupId String?  @map("parent_iiko_group_id")
-  name              String
-  path              String
-  createdAt         DateTime @default(now()) @map("created_at")
-  updatedAt         DateTime @updatedAt @map("updated_at")
-
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-
-  @@unique([organizationId, iikoGroupId])
-  @@index([organizationId, name])
-  @@map("product_groups")
-}
-
 model Product {
   id                    String        @id @default(uuid()) @db.Uuid
   organizationId        String        @map("organization_id") @db.Uuid
-  iikoProductId         String        @map("iiko_product_id")
+  // Идентификаторы iiko: item + size дают уникальный вариант товара.
+  iikoItemId            String        @map("iiko_item_id")
+  iikoSizeId            String?       @map("iiko_size_id")
+  // Сырой product id из iiko (nullable — API может использовать иное поле).
+  iikoProductId         String?       @map("iiko_product_id")
   iikoParentGroupId     String?       @map("iiko_parent_group_id")
   name                  String
+  displayName           String        @map("display_name")
   description           String?
+  sizeName              String?       @map("size_name")
+  sizeCode              String?       @map("size_code")
   sku                   String?
   productType           String?       @map("product_type")
   unit                  String?
+  categoryId            String?       @map("category_id")
+  categoryName          String?       @map("category_name")
   basePrice             Decimal       @default(0) @map("base_price") @db.Decimal(12, 2)
   currentKnownIikoPrice Decimal?      @map("current_known_iiko_price") @db.Decimal(12, 2)
   currentExchangePrice  Decimal?      @map("current_exchange_price") @db.Decimal(12, 2)
@@ -122,11 +113,19 @@ model Product {
   maxPrice              Decimal?      @map("max_price") @db.Decimal(12, 2)
   priceStep             Decimal       @default(50) @map("price_step") @db.Decimal(12, 2)
   maxChangePercent      Decimal       @default(10) @map("max_change_percent") @db.Decimal(6, 2)
+  currency              String        @default("KZT")
+  isSellable            Boolean       @default(true) @map("is_sellable")
+  isAvailable           Boolean       @default(true) @map("is_available")
   isExchangeProduct     Boolean       @default(false) @map("is_exchange_product")
   isActive              Boolean       @default(true) @map("is_active")
   status                ProductStatus @default(ACTIVE)
   imageUrl              String?       @map("image_url")
+  sourceMenuId          String?       @map("source_menu_id")
+  sourceExternalMenuId  String?       @map("source_external_menu_id")
+  sourceMetadata        Json?         @map("source_metadata")
+  syncWarnings          Json?         @map("sync_warnings")
   metadata              Json?
+  lastSeenAt            DateTime?     @map("last_seen_at")
   syncedAt              DateTime?     @map("synced_at")
   createdAt             DateTime      @default(now()) @map("created_at")
   updatedAt             DateTime      @updatedAt @map("updated_at")
@@ -135,10 +134,14 @@ model Product {
   roundPrices  RoundPrice[]
   salesEvents  SalesEvent[]
 
-  @@unique([organizationId, iikoProductId])
+  @@unique([organizationId, iikoItemId, iikoSizeId])
   @@index([name])
+  @@index([displayName])
+  @@index([categoryName])
+  @@index([isSellable])
   @@index([isExchangeProduct])
-  @@index([isActive])
+  @@index([syncedAt])
+  @@index([iikoProductId])
   @@map("products")
 }
 
