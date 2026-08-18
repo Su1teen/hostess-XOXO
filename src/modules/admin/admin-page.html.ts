@@ -42,6 +42,11 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         border-radius: 10px;
         padding: 16px;
       }
+      .span-all { grid-column: 1 / -1; }
+      .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      .table-scroll table { min-width: 720px; }
+      .table-scroll th, .table-scroll td { white-space: nowrap; }
+      .table-scroll td.wrap-cell { white-space: normal; word-break: break-word; }
       label { display: block; color: var(--muted); margin-bottom: 4px; font-size: 13px; }
       input, select {
         width: 100%;
@@ -157,7 +162,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           </table>
         </div>
 
-        <div class="card">
+        <div class="card span-all">
           <h2>Каталог iiko</h2>
           <p class="muted">Напитки-кандидаты не добавляются на биржу автоматически.</p>
           <div class="row">
@@ -182,18 +187,20 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
               <button id="btnResetFilters" class="secondary">Сбросить</button>
             </div>
           </div>
-          <table id="productsTable">
-            <thead>
-              <tr>
-                <th>Название</th><th>Размер</th><th>SKU</th><th>Категория</th>
-                <th>Текущая цена iiko</th><th>Напиток-кандидат</th><th>Выбран для биржи</th>
-                <th>iiko item ID</th><th>iiko size ID</th><th></th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr><td class="muted" colspan="10">Нет данных.</td></tr>
-            </tbody>
-          </table>
+          <div class="table-scroll">
+            <table id="productsTable">
+              <thead>
+                <tr>
+                  <th>Название</th><th>Размер</th><th>SKU</th><th>Категория</th>
+                  <th>Текущая цена iiko</th><th>Напиток-кандидат</th><th>Выбран для биржи</th>
+                  <th>iiko item ID</th><th>iiko size ID</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td class="muted" colspan="10">Нет данных.</td></tr>
+              </tbody>
+            </table>
+          </div>
           <div class="row" style="margin-top: 8px; align-items: center">
             <div style="flex: 0 0 auto">
               <button id="btnPrevPage" class="secondary">← Назад</button>
@@ -358,7 +365,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
                 ? '<button class="secondary" data-remove="' + item.id + '">Убрать из биржи</button>'
                 : '<button data-select="' + item.id + '">Добавить в биржу</button>';
               return (
-                '<tr><td>' + escapeHtml(item.name) + '</td>' +
+                '<tr><td class="wrap-cell">' + escapeHtml(item.name) + '</td>' +
                 '<td>' + escapeHtml(item.sizeName || '—') + '</td>' +
                 '<td>' + escapeHtml(item.sku || '—') + '</td>' +
                 '<td>' + escapeHtml(item.categoryName || '—') + '</td>' +
