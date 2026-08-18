@@ -158,11 +158,20 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         </div>
 
         <div class="card">
-          <h2>Товары биржи</h2>
+          <h2>Каталог iiko</h2>
+          <p class="muted">Напитки-кандидаты не добавляются на биржу автоматически.</p>
           <div class="row">
             <div>
-              <label for="search">Поиск (название, размер, SKU, категория)</label>
-              <input id="search" type="text" placeholder="Например: джин" />
+              <label for="catalogScope">Фильтр каталога</label>
+              <select id="catalogScope">
+                <option value="candidates">Напитки-кандидаты</option>
+                <option value="all">Весь каталог</option>
+                <option value="exchange">Только товары биржи</option>
+              </select>
+            </div>
+            <div>
+              <label for="search">Поиск</label>
+              <input id="search" type="text" placeholder="Название, размер, SKU, категория" />
             </div>
             <div>
               <label for="categorySelect">Категория</label>
@@ -170,19 +179,19 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
             </div>
             <div style="flex: 0 0 auto">
               <button id="btnSearch">Найти</button>
-              <button id="btnExchange" class="secondary">Только биржевые</button>
               <button id="btnResetFilters" class="secondary">Сбросить</button>
             </div>
           </div>
           <table id="productsTable">
             <thead>
               <tr>
-                <th>Товар</th><th>Размер</th><th>SKU</th><th>Категория</th>
-                <th>Цена</th><th>Доступен</th><th>Биржа</th><th></th>
+                <th>Название</th><th>Размер</th><th>SKU</th><th>Категория</th>
+                <th>Текущая цена iiko</th><th>Напиток-кандидат</th><th>Выбран для биржи</th>
+                <th>iiko item ID</th><th>iiko size ID</th><th></th>
               </tr>
             </thead>
             <tbody>
-              <tr><td class="muted" colspan="8">Нет данных.</td></tr>
+              <tr><td class="muted" colspan="10">Нет данных.</td></tr>
             </tbody>
           </table>
           <div class="row" style="margin-top: 8px; align-items: center">
@@ -291,6 +300,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
             ['iiko Cloud API', data.checks && data.checks.iiko, true],
             ['Организация', (data.organization && data.organization.name) || 'не выбрана', false],
             ['Товаров всего', data.products && data.products.total, false],
+            ['Напитков-кандидатов', data.products && data.products.drinkCandidates, false],
             ['Биржевых товаров', data.products && data.products.exchange, false],
             ['Текущее окно', rounds.currentWindow && rounds.currentWindow.roundKey, false],
             ['Следующее окно', rounds.nextWindow && rounds.nextWindow.roundKey, false],
@@ -333,33 +343,30 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           }
         }
 
-        var productsState = { page: 1, pageSize: 50, exchangeOnly: false };
+        var productsState = { page: 1, pageSize: 50 };
 
         function renderProducts(items) {
           var tbody = el('productsTable').querySelector('tbody');
           if (!items || items.length === 0) {
-            tbody.innerHTML = '<tr><td class="muted" colspan="8">Ничего не найдено.</td></tr>';
+            tbody.innerHTML = '<tr><td class="muted" colspan="10">Ничего не найдено.</td></tr>';
             return;
           }
           tbody.innerHTML = items
             .map(function (item) {
-              var price = item.currentExchangePrice !== null && item.currentExchangePrice !== undefined
-                ? item.currentExchangePrice
-                : item.basePrice;
-              var avail = item.isAvailable
-                ? '<span class="status ok">да</span>'
-                : '<span class="status err">нет</span>';
+              var price = item.currentKnownIikoPrice === null ? '—' : item.currentKnownIikoPrice + ' ₸';
               var action = item.isExchangeProduct
                 ? '<button class="secondary" data-remove="' + item.id + '">Убрать из биржи</button>'
                 : '<button data-select="' + item.id + '">Добавить в биржу</button>';
               return (
-                '<tr><td>' + escapeHtml(item.displayName || item.name) + '</td>' +
+                '<tr><td>' + escapeHtml(item.name) + '</td>' +
                 '<td>' + escapeHtml(item.sizeName || '—') + '</td>' +
                 '<td>' + escapeHtml(item.sku || '—') + '</td>' +
                 '<td>' + escapeHtml(item.categoryName || '—') + '</td>' +
-                '<td>' + escapeHtml(price) + ' ₸</td>' +
-                '<td>' + avail + '</td>' +
-                '<td>' + (item.isExchangeProduct ? 'да' : 'нет') + '</td>' +
+                '<td>' + escapeHtml(price) + '</td>' +
+                '<td>' + flag(item.isDrinkCandidate) + '</td>' +
+                '<td>' + flag(item.isExchangeProduct) + '</td>' +
+                '<td>' + escapeHtml(item.iikoItemIdShort) + '</td>' +
+                '<td>' + escapeHtml(item.iikoSizeIdShort || '—') + '</td>' +
                 '<td>' + action + '</td></tr>'
               );
             })
@@ -374,17 +381,23 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           el('btnNextPage').disabled = pagination.page >= pagination.totalPages;
         }
 
+        function applyCatalogScope(params) {
+          var scope = el('catalogScope').value;
+          params.set('drinkCandidatesOnly', scope === 'candidates' ? 'true' : 'false');
+          params.set('sellableOnly', scope === 'candidates' ? 'true' : 'false');
+          params.set('availableOnly', scope === 'candidates' ? 'true' : 'false');
+          params.set('activeOnly', scope === 'candidates' ? 'true' : 'false');
+          params.set('exchangeOnly', scope === 'exchange' ? 'true' : 'false');
+          return params;
+        }
+
         function loadProducts() {
-          var params = new URLSearchParams();
+          var params = applyCatalogScope(new URLSearchParams());
           params.set('page', String(productsState.page));
           params.set('pageSize', String(productsState.pageSize));
-          params.set('sellableOnly', 'true');
-          params.set('availableOnly', 'true');
-          params.set('activeOnly', 'true');
           if (el('search').value.trim()) { params.set('search', el('search').value.trim()); }
           var cat = el('categorySelect').value;
           if (cat) { params.set('category', cat); }
-          if (productsState.exchangeOnly) { params.set('exchangeOnly', 'true'); }
           return request('GET', '/api/v1/admin/products?' + params.toString()).then(function (data) {
             renderProducts(data.data);
             renderPagination(data.pagination);
@@ -392,7 +405,12 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         }
 
         function loadCategories() {
-          return request('GET', '/api/v1/admin/products/categories').then(function (data) {
+          var params = new URLSearchParams();
+          var candidates = el('catalogScope').value === 'candidates';
+          params.set('drinkCandidatesOnly', candidates ? 'true' : 'false');
+          params.set('sellableOnly', candidates ? 'true' : 'false');
+          params.set('availableOnly', candidates ? 'true' : 'false');
+          return request('GET', '/api/v1/admin/products/categories?' + params.toString()).then(function (data) {
             var select = el('categorySelect');
             var items = data.items || [];
             var current = select.value;
@@ -415,17 +433,19 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           }
           var rows = [
             ['Успех', data.success ? '<span class="status ok">да</span>' : '<span class="status err">нет</span>'],
-            ['Категорий в источнике', data.sourceCategoryCount],
             ['Товаров в источнике', data.sourceItemCount],
-            ['Sellable вариантов извлечено', data.extractedVariantCount],
+            ['Категорий напитков', data.drinkCategoryCount],
+            ['Напитков-кандидатов', data.drinkCandidateCount],
+            ['Кандидатов с числовой ценой', data.candidateWithFinitePriceCount],
+            ['Кандидатов с положительной ценой', data.candidateWithPositivePriceCount],
             ['Сохранено (новых)', data.savedCount],
             ['Обновлено', data.updatedCount],
-            ['Пропущено без размеров', data.skippedNoSizes],
-            ['Пропущено hidden', data.skippedHidden],
-            ['Пропущено нулевая цена', data.skippedZeroPriceCount],
-            ['Пропущено битая цена', data.skippedMalformedCount],
-            ['Пропущено неоднозначная цена', data.skippedAmbiguousCount],
+            ['Кандидатов с нулевой ценой', data.zeroPriceCandidateCount],
+            ['Пропущено без item ID', data.skippedWithoutItemIdCount],
+            ['Пропущено без цены', data.skippedWithoutPriceCount],
+            ['Не напитки', data.nonDrinkItemCount],
             ['Помечено недоступными', data.unavailableCount],
+            ['Товары биржи', 'выбираются администратором отдельно'],
             ['correlationId', data.correlationId || '—'],
             ['Длительность, мс', data.durationMs],
             ['Ошибка', data.error || '—'],
@@ -625,17 +645,17 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           productsState.page = 1;
           silent(loadProducts());
         });
-        el('btnExchange').addEventListener('click', function () {
-          productsState.exchangeOnly = !productsState.exchangeOnly;
+        el('catalogScope').addEventListener('change', function () {
           productsState.page = 1;
-          silent(loadProducts());
+          el('categorySelect').value = '';
+          silent(Promise.all([loadCategories(), loadProducts()]));
         });
         el('btnResetFilters').addEventListener('click', function () {
+          el('catalogScope').value = 'candidates';
           el('search').value = '';
           el('categorySelect').value = '';
-          productsState.exchangeOnly = false;
           productsState.page = 1;
-          silent(loadProducts());
+          silent(Promise.all([loadCategories(), loadProducts()]));
         });
         el('categorySelect').addEventListener('change', function () {
           productsState.page = 1;

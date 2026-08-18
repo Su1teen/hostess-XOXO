@@ -1,751 +1,333 @@
 import { describe, expect, it } from 'vitest';
-import {
-  normalizePositivePrice,
-  parseExternalMenu,
-} from '../src/modules/iiko/iiko-menu-parser.js';
+import { parseExternalMenu } from '../src/modules/iiko/iiko-menu-parser.js';
 
-const ORG_ID = 'cc9baa8d-cfac-4092-9c97-477746fe84e2';
+const ORG_ID = 'configured-org-id';
 
-/**
- * Фикстура полного внешнего меню iiko (ответ POST /api/2/menu/by_id).
- * Реальная структура: productCategories + itemCategories[].items[].
- */
-const fixtureMenu = {
-  correlationId: 'corr-123',
-  id: 'menu-001',
-  externalMenuId: '88042',
-  productCategories: [
-    { id: 'cat-cocktails', name: 'Коктейли', isDeleted: false },
-    { id: 'cat-beer', name: 'Пиво' },
-  ],
-  itemCategories: [
-    {
-      items: [
-        {
-          id: 'item-gin-tonic',
-          name: 'Gin Tonic',
-          sku: 'GT-001',
-          productCategoryId: 'cat-cocktails',
-          itemSizes: [
-            {
-              id: 'size-250',
-              name: '250 ml',
-              sizeCode: 'S',
-              prices: [{ price: 2500, organizations: [{ id: ORG_ID }] }],
-            },
-            {
-              id: 'size-400',
-              name: '400 ml',
-              sizeCode: 'L',
-              prices: [{ price: 3200, organizations: [{ id: ORG_ID }] }],
-            },
-          ],
-        },
-        {
-          id: 'item-espresso',
-          name: 'Espresso',
-          sku: 'ESP-1',
-          productCategoryId: 'cat-beer',
-          itemSizes: [
-            { id: 'size-single', name: 'single', prices: [{ price: 900 }] },
-          ],
-        },
-        // Без itemSizes — пропускается.
-        {
-          id: 'item-no-sizes',
-          name: 'Syrup',
-          itemSizes: [],
-        },
-        // Hidden — пропускается.
-        {
-          id: 'item-hidden',
-          name: 'Secret',
-          hidden: true,
-          itemSizes: [{ id: 's1', prices: [{ price: 100 }] }],
-        },
-        // Все цены нулевые — пропускается.
-        {
-          id: 'item-zero',
-          name: 'Free',
-          itemSizes: [{ id: 's1', prices: [{ price: 0 }] }],
-        },
-        // Цена принадлежит другой организации — пропускается.
-        {
-          id: 'item-other-org',
-          name: 'Other Org Drink',
-          itemSizes: [
-            { id: 's1', prices: [{ price: 500, organizations: [{ id: 'other-org' }] }] },
-          ],
-        },
-        // Битая цена (строка) — пропускается как malformed.
-        {
-          id: 'item-malformed',
-          name: 'Broken',
-          itemSizes: [{ id: 's1', prices: [{ price: 'not-a-number' }] }],
-        },
-        // Неоднозначная цена: две положительные generic цены без орг-матча — пропускается.
-        {
-          id: 'item-ambiguous',
-          name: 'Ambiguous',
-          itemSizes: [{ id: 's1', prices: [{ price: 100 }, { price: 200 }] }],
-        },
-      ],
-    },
-  ],
-};
+function menuWith(items: unknown[], productCategories: unknown[] = []) {
+  return {
+    correlationId: 'corr-1',
+    id: 'menu-1',
+    productCategories,
+    itemCategories: [{ items }],
+  };
+}
 
-describe('parseExternalMenu /api/2/menu/by_id', () => {
-  it('строит карту productCategories id -> name', () => {
-    const result = parseExternalMenu(fixtureMenu, { organizationId: ORG_ID });
-    expect(result.sourceCategoryCount).toBe(2);
-    const gin = result.variants.find((v) => v.iikoItemId === 'item-gin-tonic');
-    expect(gin?.categoryId).toBe('cat-cocktails');
-    expect(gin?.categoryName).toBe('Коктейли');
-  });
+function realItem(overrides: Record<string, unknown> = {}) {
+  return {
+    itemId: 'item-ava',
+    name: 'AVA лимонад',
+    sku: 'AVA-1',
+    productCategoryId: 'soft-drinks',
+    itemSizes: [
+      {
+        sizeId: null,
+        sizeName: null,
+        prices: [{ organizationId: ORG_ID, price: 850.0 }],
+      },
+    ],
+    ...overrides,
+  };
+}
 
-  it('flatten itemCategories[].items[] (НЕ корневой items)', () => {
-    const result = parseExternalMenu(fixtureMenu, { organizationId: ORG_ID });
-    // Все товары из фикстуры учтены в sourceItemCount (включая пропущенные).
-    expect(result.sourceItemCount).toBe(8);
-  });
+describe('iiko drinks extractor port', () => {
+  it('imports AVA lemonade from the real itemId/sizeId shape with price 850', () => {
+    const result = parseExternalMenu(menuWith([realItem()]), { organizationId: ORG_ID });
 
-  it('извлекает sellable variants: один товар с двумя размерами = две строки', () => {
-    const result = parseExternalMenu(fixtureMenu, { organizationId: ORG_ID });
-    const gin = result.variants.filter((v) => v.iikoItemId === 'item-gin-tonic');
-    expect(gin).toHaveLength(2);
-    expect(gin[0]?.sizeName).toBe('250 ml');
-    expect(gin[0]?.basePrice).toBe(2500);
-    expect(gin[0]?.displayName).toBe('Gin Tonic · 250 ml');
-    expect(gin[1]?.sizeName).toBe('400 ml');
-    expect(gin[1]?.basePrice).toBe(3200);
-    expect(gin[1]?.displayName).toBe('Gin Tonic · 400 ml');
-  });
-
-  it('НЕ схлопывает размеры в maxPrice: каждая цена = отдельная строка', () => {
-    const result = parseExternalMenu(fixtureMenu, { organizationId: ORG_ID });
-    const prices = result.variants
-      .filter((v) => v.iikoItemId === 'item-gin-tonic')
-      .map((v) => v.basePrice);
-    expect(prices).toEqual([2500, 3200]);
-  });
-
-  it('извлекает товар с одной положительной ценой', () => {
-    const result = parseExternalMenu(fixtureMenu, { organizationId: ORG_ID });
-    const espresso = result.variants.find((v) => v.iikoItemId === 'item-espresso');
-    expect(espresso).toBeDefined();
-    expect(espresso?.basePrice).toBe(900);
-    expect(espresso?.sku).toBe('ESP-1');
-  });
-
-  it('пропускает товар без itemSizes', () => {
-    const result = parseExternalMenu(fixtureMenu, { organizationId: ORG_ID });
-    expect(result.variants.some((v) => v.iikoItemId === 'item-no-sizes')).toBe(false);
-    expect(result.skippedNoSizes).toBeGreaterThanOrEqual(1);
-  });
-
-  it('пропускает товар со всеми нулевыми ценами', () => {
-    const result = parseExternalMenu(fixtureMenu, { organizationId: ORG_ID });
-    expect(result.variants.some((v) => v.iikoItemId === 'item-zero')).toBe(false);
-    expect(result.skippedZeroPrice).toBeGreaterThanOrEqual(1);
-  });
-
-  it('пропускает hidden товар', () => {
-    const result = parseExternalMenu(fixtureMenu, { organizationId: ORG_ID });
-    expect(result.variants.some((v) => v.iikoItemId === 'item-hidden')).toBe(false);
-    expect(result.skippedHidden).toBe(1);
-  });
-
-  it('импортирует положительную цену независимо от organization metadata', () => {
-    const result = parseExternalMenu(fixtureMenu, { organizationId: ORG_ID });
-    expect(result.variants.some((v) => v.iikoItemId === 'item-other-org')).toBe(true);
-  });
-
-  it('пропускает malformed цену', () => {
-    const result = parseExternalMenu(fixtureMenu, { organizationId: ORG_ID });
-    expect(result.variants.some((v) => v.iikoItemId === 'item-malformed')).toBe(false);
-    expect(result.skippedMalformedPrice).toBeGreaterThanOrEqual(1);
-  });
-
-  it('берёт первую положительную цену без ambiguity logic', () => {
-    const result = parseExternalMenu(fixtureMenu, { organizationId: ORG_ID });
-    const variant = result.variants.find((v) => v.iikoItemId === 'item-ambiguous');
-    expect(variant?.basePrice).toBe(100);
-    expect(result.skippedAmbiguousPrice).toBe(0);
-  });
-
-  it('сохраняет correlationId и source ids', () => {
-    const result = parseExternalMenu(fixtureMenu, {
-      organizationId: ORG_ID,
-      externalMenuId: '88042',
+    expect(result.variants).toHaveLength(1);
+    expect(result.variants[0]).toMatchObject({
+      iikoItemId: 'item-ava',
+      iikoSizeId: null,
+      name: 'AVA лимонад',
+      displayName: 'AVA лимонад',
+      sku: 'AVA-1',
+      basePrice: 850,
+      isDrinkCandidate: true,
+      isSellable: true,
+      isAvailable: true,
     });
-    expect(result.correlationId).toBe('corr-123');
-    expect(result.sourceMenuId).toBe('menu-001');
-    expect(result.sourceExternalMenuId).toBe('88042');
+    expect(result.candidateWithFinitePriceCount).toBe(1);
+    expect(result.candidateWithPositivePriceCount).toBe(1);
   });
 
-  it('каждая строка имеет уникальный идентификатор organizationId + iikoItemId + iikoSizeId', () => {
-    const result = parseExternalMenu(fixtureMenu, { organizationId: ORG_ID });
-    const keys = result.variants.map(
-      (v) => `${v.organizationId}|${v.iikoItemId}|${v.iikoSizeId}`,
+  it('imports a Bacardi-like item through a detected rum category', () => {
+    const result = parseExternalMenu(
+      menuWith(
+        [
+          realItem({
+            itemId: 'bacardi-id',
+            name: 'Bacardi Carta Blanca',
+            productCategoryId: 'rum-category',
+          }),
+        ],
+        [{ id: 'rum-category', name: 'Ром' }],
+      ),
+      { organizationId: ORG_ID },
     );
-    const unique = new Set(keys);
-    expect(keys.length).toBe(unique.size);
+
+    expect(result.drinkCategoryCount).toBe(1);
+    expect(result.variants[0]?.iikoItemId).toBe('bacardi-id');
   });
 
-  it('использует fallback size id, когда у размера нет id', () => {
-    const menu = {
-      productCategories: [],
-      itemCategories: [
-        {
-          items: [
+  it('does not create a sellable variant when price is null', () => {
+    const result = parseExternalMenu(
+      menuWith([
+        realItem({
+          itemSizes: [
             {
-              id: 'item-x',
-              name: 'X',
-              itemSizes: [{ name: 'big', prices: [{ price: 100 }] }],
+              sizeId: 'null-size',
+              sizeName: 'Null',
+              prices: [{ organizationId: ORG_ID, price: null }],
             },
           ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants).toHaveLength(1);
-    expect(result.variants[0]?.iikoSizeId).toBe('__no_size__');
+        }),
+      ]),
+      { organizationId: ORG_ID },
+    );
+
+    expect(result.variants.filter((variant) => variant.isSellable)).toHaveLength(0);
+    expect(result.skippedWithoutPriceCount).toBe(1);
   });
 
-  it('игнорирует отрицательные и NaN цены', () => {
-    const menu = {
-      productCategories: [],
-      itemCategories: [
-        {
-          items: [
+  it('preserves a zero-priced candidate but marks it non-sellable and unavailable', () => {
+    const result = parseExternalMenu(
+      menuWith([
+        realItem({
+          itemSizes: [
             {
-              id: 'item-neg',
-              name: 'Neg',
-              itemSizes: [
-                { id: 's1', prices: [{ price: -10 }, { price: 150 }] },
-              ],
+              sizeId: 'zero-size',
+              sizeName: 'Zero',
+              prices: [{ organizationId: ORG_ID, price: 0 }],
             },
           ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants).toHaveLength(1);
-    expect(result.variants[0]?.basePrice).toBe(150);
+        }),
+      ]),
+      { organizationId: ORG_ID },
+    );
+
+    expect(result.variants[0]).toMatchObject({
+      basePrice: 0,
+      isSellable: false,
+      isAvailable: false,
+      sourceMetadata: { sourcePrice: 0 },
+    });
+    expect(result.zeroPriceCandidateCount).toBe(1);
+    expect(result.candidateWithPositivePriceCount).toBe(0);
   });
 
-  it('обрабатывает пустой/некорректный ответ без ошибок', () => {
-    const result = parseExternalMenu(null, { organizationId: ORG_ID });
-    expect(result.variants).toEqual([]);
-    expect(result.sourceItemCount).toBe(0);
-  });
+  it('excludes a food item whose name contains both burger and cola', () => {
+    const result = parseExternalMenu(
+      menuWith([
+        realItem({
+          itemId: 'burger-cola',
+          name: 'Бургер с кола соусом',
+          productCategoryId: 'food',
+        }),
+      ]),
+      { organizationId: ORG_ID },
+    );
 
-  it('maxPrice aggregation никогда не используется для persisted exchange products', () => {
-    const menu = {
-      productCategories: [],
-      itemCategories: [
-        {
-          items: [
-            {
-              id: 'item-multi',
-              name: 'Multi',
-              itemSizes: [
-                { id: 's1', name: 'small', prices: [{ price: 100 }] },
-                { id: 's2', name: 'big', prices: [{ price: 300 }] },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    // Две строки с разными ценами, не одна строка с max=300.
-    expect(result.variants).toHaveLength(2);
-    expect(result.variants.map((v) => v.basePrice).sort((a, b) => a - b)).toEqual([100, 300]);
-  });
-});
-
-describe('normalizePositivePrice', () => {
-  it('принимает number > 0', () => {
-    expect(normalizePositivePrice(2500)).toBe(2500);
-    expect(normalizePositivePrice(25.5)).toBe(25.5);
-  });
-
-  it('принимает numeric string "2500"', () => {
-    expect(normalizePositivePrice('2500')).toBe(2500);
-  });
-
-  it('принимает decimal string "2500.00"', () => {
-    expect(normalizePositivePrice('2500.00')).toBe(2500);
-  });
-
-  it('принимает comma decimal string "2500,00"', () => {
-    expect(normalizePositivePrice('2500,00')).toBe(2500);
-  });
-
-  it('отвергает zero, отрицательные, NaN, мусор', () => {
-    expect(normalizePositivePrice(0)).toBeNull();
-    expect(normalizePositivePrice(-10)).toBeNull();
-    expect(normalizePositivePrice(NaN)).toBeNull();
-    expect(normalizePositivePrice(Infinity)).toBeNull();
-    expect(normalizePositivePrice('not-a-number')).toBeNull();
-    expect(normalizePositivePrice('')).toBeNull();
-    expect(normalizePositivePrice(null)).toBeNull();
-    expect(normalizePositivePrice(undefined)).toBeNull();
-    expect(normalizePositivePrice(true)).toBe(1);
-    expect(normalizePositivePrice({})).toBeNull();
-  });
-});
-
-describe('parseExternalMenu price normalization (real iiko shapes)', () => {
-  it('парсит цену как string "2500" (основной формат /api/2/menu/by_id)', () => {
-    const menu = {
-      itemCategories: [
-        {
-          items: [
-            {
-              id: 'item-1',
-              name: 'Cola',
-              itemSizes: [
-                {
-                  id: 'size-1',
-                  name: '0.5L',
-                  prices: [{ price: '2500', organizationId: ORG_ID }],
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants).toHaveLength(1);
-    expect(result.variants[0]?.basePrice).toBe(2500);
-    expect(result.skippedMalformedPrice).toBe(0);
-  });
-
-  it('парсит цену как decimal string "2500.00"', () => {
-    const menu = {
-      itemCategories: [
-        {
-          items: [
-            {
-              id: 'item-1',
-              name: 'Cola',
-              itemSizes: [
-                { id: 's1', prices: [{ price: '2500.00' }] },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants).toHaveLength(1);
-    expect(result.variants[0]?.basePrice).toBe(2500);
-  });
-
-  it('парсит цену как comma decimal string "2500,00"', () => {
-    const menu = {
-      itemCategories: [
-        {
-          items: [
-            {
-              id: 'item-1',
-              name: 'Cola',
-              itemSizes: [
-                { id: 's1', prices: [{ price: '2500,00' }] },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants).toHaveLength(1);
-    expect(result.variants[0]?.basePrice).toBe(2500);
-  });
-
-  it('парсит цену как number 2500', () => {
-    const menu = {
-      itemCategories: [
-        {
-          items: [
-            {
-              id: 'item-1',
-              name: 'Cola',
-              itemSizes: [
-                { id: 's1', prices: [{ price: 2500 }] },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants).toHaveLength(1);
-    expect(result.variants[0]?.basePrice).toBe(2500);
-  });
-
-  it('парсит цену из priceRecord.currentPrice', () => {
-    const menu = {
-      itemCategories: [
-        {
-          items: [
-            {
-              id: 'item-1',
-              name: 'Cola',
-              itemSizes: [
-                {
-                  id: 's1',
-                  prices: [{ currentPrice: 1800, isIncludedInMenu: true }],
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants).toHaveLength(1);
-    expect(result.variants[0]?.basePrice).toBe(1800);
-  });
-
-  it('парсит цену из price.amount (альтернативное имя)', () => {
-    const menu = {
-      itemCategories: [
-        {
-          items: [
-            {
-              id: 'item-1',
-              name: 'Cola',
-              itemSizes: [
-                { id: 's1', prices: [{ amount: 1500 }] },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants).toHaveLength(1);
-    expect(result.variants[0]?.basePrice).toBe(1500);
-  });
-
-  it('парсит цену из price.value (альтернативное имя)', () => {
-    const menu = {
-      itemCategories: [
-        {
-          items: [
-            {
-              id: 'item-1',
-              name: 'Cola',
-              itemSizes: [
-                { id: 's1', prices: [{ value: 1200 }] },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants).toHaveLength(1);
-    expect(result.variants[0]?.basePrice).toBe(1200);
-  });
-
-  it('пропускает null и zero цены', () => {
-    const menu = {
-      itemCategories: [
-        {
-          items: [
-            {
-              id: 'item-zero',
-              name: 'Free',
-              itemSizes: [
-                { id: 's1', prices: [{ price: 0 }] },
-              ],
-            },
-            {
-              id: 'item-null',
-              name: 'NullPrice',
-              itemSizes: [
-                { id: 's1', prices: [{ price: null }] },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
     expect(result.variants).toHaveLength(0);
-    expect(result.skippedZeroPrice).toBeGreaterThanOrEqual(1);
+    expect(result.nonDrinkItemCount).toBe(1);
   });
 
-  it('обрабатывает item с двумя размерами (string и number цены)', () => {
-    const menu = {
-      itemCategories: [
-        {
-          items: [
+  it('includes an opaque item name when its category is a drink category', () => {
+    const result = parseExternalMenu(
+      menuWith(
+        [realItem({ itemId: 'opaque', name: 'AVA 2026', productCategoryId: 'bar' })],
+        [{ id: 'bar', name: 'Барное меню' }],
+      ),
+      { organizationId: ORG_ID },
+    );
+
+    expect(result.variants[0]?.iikoItemId).toBe('opaque');
+  });
+
+  it('creates separate variants for multiple item sizes without max aggregation', () => {
+    const result = parseExternalMenu(
+      menuWith([
+        realItem({
+          itemSizes: [
             {
-              id: 'item-beer',
-              name: 'Beer',
-              itemSizes: [
-                { id: 's-small', name: '0.3L', prices: [{ price: '800' }] },
-                { id: 's-large', name: '0.5L', prices: [{ price: 1200 }] },
+              sizeId: 'size-small',
+              sizeName: '0.3 л',
+              prices: [{ organizationId: ORG_ID, price: 800 }],
+            },
+            {
+              sizeId: 'size-large',
+              sizeName: '0.5 л',
+              prices: [{ organizationId: ORG_ID, price: 1200 }],
+            },
+          ],
+        }),
+      ]),
+      { organizationId: ORG_ID },
+    );
+
+    expect(result.variants.map((variant) => [variant.iikoSizeId, variant.basePrice])).toEqual([
+      ['size-small', 800],
+      ['size-large', 1200],
+    ]);
+  });
+
+  it('uses itemId and sizeId before fallback id fields and preserves source IDs', () => {
+    const result = parseExternalMenu(
+      menuWith([
+        realItem({
+          itemId: 'real-item-id',
+          id: 'fallback-item-id',
+          itemSizes: [
+            {
+              sizeId: 'real-size-id',
+              id: 'fallback-size-id',
+              sizeName: 'Bottle',
+              prices: [{ organizationId: ORG_ID, price: 950 }],
+            },
+          ],
+        }),
+      ]),
+      { organizationId: ORG_ID },
+    );
+
+    expect(result.variants[0]).toMatchObject({
+      iikoItemId: 'real-item-id',
+      iikoSizeId: 'real-size-id',
+      sizeName: 'Bottle',
+      sourceMetadata: {
+        originalItemId: 'real-item-id',
+        originalSizeId: 'real-size-id',
+      },
+    });
+  });
+
+  it('falls back to id fields only when real itemId/sizeId fields are absent', () => {
+    const item = realItem({
+      itemId: undefined,
+      id: 'fallback-item',
+      itemSizes: [
+        {
+          id: 'fallback-size',
+          name: 'Fallback size',
+          prices: [{ price: 700 }],
+        },
+      ],
+    });
+    const result = parseExternalMenu(menuWith([item]), { organizationId: ORG_ID });
+
+    expect(result.variants[0]).toMatchObject({
+      iikoItemId: 'fallback-item',
+      iikoSizeId: 'fallback-size',
+      sizeName: 'Fallback size',
+    });
+  });
+
+  it('does not deduplicate different iiko items by name', () => {
+    const result = parseExternalMenu(
+      menuWith([
+        realItem({ itemId: 'same-name-1' }),
+        realItem({ itemId: 'same-name-2' }),
+      ]),
+      { organizationId: ORG_ID },
+    );
+
+    expect(result.variants.map((variant) => variant.iikoItemId)).toEqual([
+      'same-name-1',
+      'same-name-2',
+    ]);
+  });
+
+  it('prefers the configured organization price and falls back to the first finite price', () => {
+    const preferred = parseExternalMenu(
+      menuWith([
+        realItem({
+          itemSizes: [
+            {
+              sizeId: 'preferred',
+              prices: [
+                { organizationId: 'other-org', price: 500 },
+                { organizationId: ORG_ID, price: 850 },
               ],
             },
           ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants).toHaveLength(2);
-    expect(result.variants[0]?.basePrice).toBe(800);
-    expect(result.variants[0]?.sizeName).toBe('0.3L');
-    expect(result.variants[1]?.basePrice).toBe(1200);
-    expect(result.variants[1]?.sizeName).toBe('0.5L');
-    // Оба сохраняют iikoItemId.
-    expect(result.variants.every((v) => v.iikoItemId === 'item-beer')).toBe(true);
-  });
-
-  it('обрабатывает вложенные itemCategories (множественные категории)', () => {
-    const menu = {
-      itemCategories: [
-        {
-          id: 'cat-drinks',
-          name: 'Напитки',
-          items: [
-            { id: 'item-cola', name: 'Cola', itemSizes: [{ id: 's1', prices: [{ price: '500' }] }] },
-          ],
-        },
-        {
-          id: 'cat-food',
-          name: 'Еда',
-          items: [
-            { id: 'item-burger', name: 'Burger', itemSizes: [{ id: 's1', prices: [{ price: '1500' }] }] },
-          ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants).toHaveLength(2);
-    expect(result.sourceItemCount).toBe(2);
-    expect(result.sourceCategoryCount).toBe(2);
-  });
-
-  it('пропускает malformed цену (строка не-число)', () => {
-    const menu = {
-      itemCategories: [
-        {
-          items: [
+        }),
+      ]),
+      { organizationId: ORG_ID },
+    );
+    const fallback = parseExternalMenu(
+      menuWith([
+        realItem({
+          itemSizes: [
             {
-              id: 'item-bad',
-              name: 'Bad',
-              itemSizes: [
-                { id: 's1', prices: [{ price: 'not-a-number' }] },
+              sizeId: 'fallback',
+              prices: [
+                { organizationId: 'other-org', price: 600 },
+                { organizationId: 'third-org', price: 700 },
               ],
             },
           ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants).toHaveLength(0);
-    expect(result.skippedMalformedPrice).toBe(1);
+        }),
+      ]),
+      { organizationId: ORG_ID },
+    );
+
+    expect(preferred.variants[0]?.basePrice).toBe(850);
+    expect(fallback.variants[0]?.basePrice).toBe(600);
   });
 
-  it('не требует organizationId и выбирает первую положительную цену', () => {
-    const menu = {
-      itemCategories: [
-        {
-          items: [
-            {
-              id: 'item-org',
-              name: 'Org Drink',
-              itemSizes: [
-                {
-                  id: 's1',
-                  prices: [
-                    { price: '1000', organizationId: 'other-org' },
-                    { price: '1200', organizationId: ORG_ID },
-                  ],
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants).toHaveLength(1);
-    expect(result.variants[0]?.basePrice).toBe(1000);
+  it('reports candidate and non-drink summary counters separately', () => {
+    const result = parseExternalMenu(
+      menuWith([
+        realItem(),
+        realItem({ itemId: 'missing-price', itemSizes: [{ sizeId: 's', prices: [] }] }),
+        realItem({ itemId: undefined, id: undefined }),
+        realItem({ itemId: 'food', name: 'Хлеб', productCategoryId: 'food' }),
+      ]),
+      { organizationId: ORG_ID },
+    );
+
+    expect(result).toMatchObject({
+      sourceItemCount: 4,
+      drinkCandidateCount: 3,
+      candidateWithFinitePriceCount: 1,
+      candidateWithPositivePriceCount: 1,
+      skippedWithoutItemIdCount: 1,
+      skippedWithoutPriceCount: 1,
+      nonDrinkItemCount: 1,
+    });
   });
 
-  it('не требует organizations и выбирает первую положительную цену', () => {
-    const menu = {
-      itemCategories: [
-        {
-          items: [
-            {
-              id: 'item-org',
-              name: 'Org Drink',
-              itemSizes: [
-                {
-                  id: 's1',
-                  prices: [
-                    { price: 1000, organizations: [{ id: 'other-org' }] },
-                    { price: 1200, organizations: [{ id: ORG_ID }] },
-                  ],
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants).toHaveLength(1);
-    expect(result.variants[0]?.basePrice).toBe(1000);
-  });
-
-  it('диагностика содержит safe real sample без секретов', () => {
-    const menu = {
-      itemCategories: [
-        {
-          items: [
-            {
-              id: 'item-1',
-              name: 'Sample Item',
-              itemSizes: [
-                {
-                  id: 's1',
-                  name: 'Sample Size',
-                  prices: [
-                    {
-                      price: '2500',
-                      organizationId: ORG_ID,
-                      token: 'must-not-leak',
-                      nested: { clientSecret: 'must-not-leak' },
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.parserSamples).toHaveLength(1);
-    const sample = result.parserSamples[0];
-    expect(sample?.itemName).toBe('Sample Item');
-    expect(sample?.sizeName).toBe('Sample Size');
-    expect(sample?.pricesIsArray).toBe(true);
-    expect(sample?.pricesLength).toBe(1);
-    expect(sample?.priceValue).toBe('2500');
-    expect(sample?.priceValueType).toBe('string');
-    expect(sample?.javascriptNumberConversion).toBe(2500);
-    expect(sample?.positiveByPostmanRule).toBe(true);
-    expect(sample?.selectedPriceField).toBe('price');
-    expect(sample?.coercedPositivePrice).toBe(2500);
-    expect(sample?.firstPriceKeys).toContain('price');
-    expect(sample?.firstPriceKeys).not.toContain('token');
+  it('keeps parser samples safe and limited to three real records', () => {
+    const items = [0, 1, 2, 3].map((index) =>
+      realItem({
+        itemId: `item-${index}`,
+        itemSizes: [
+          {
+            sizeId: `size-${index}`,
+            sizeName: `Size ${index}`,
+            prices: [
+              {
+                organizationId: ORG_ID,
+                price: 850,
+                token: 'must-not-leak',
+                nested: { clientSecret: 'must-not-leak' },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const result = parseExternalMenu(menuWith(items), { organizationId: ORG_ID });
     const serialized = JSON.stringify(result.parserSamples);
+
+    expect(result.parserSamples).toHaveLength(3);
+    expect(result.parserSamples[0]).toMatchObject({
+      itemName: 'AVA лимонад',
+      sizeName: 'Size 0',
+      priceValue: 850,
+      javascriptNumberConversion: 850,
+      selectedPriceField: 'price',
+    });
     expect(serialized).not.toContain('must-not-leak');
     expect(serialized).not.toContain('clientSecret');
     expect(serialized).not.toContain('token');
-  });
-
-  it('парсит primitive price record', () => {
-    const menu = {
-      itemCategories: [
-        {
-          items: [
-            {
-              id: 'item-primitive',
-              name: 'Primitive',
-              itemSizes: [{ id: 's1', prices: ['750'] }],
-            },
-          ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants[0]?.basePrice).toBe(750);
-    expect(result.parserSamples[0]?.selectedPriceField).toBe('primitive');
-  });
-
-  it('игнорирует дополнительные поля и не требует organization metadata', () => {
-    const menu = {
-      itemCategories: [
-        {
-          items: [
-            {
-              id: 'item-loose',
-              name: 'Loose',
-              itemSizes: [
-                {
-                  id: 's1',
-                  prices: [{ price: '875', unrelated: { any: 'value' }, enabled: false }],
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants[0]?.basePrice).toBe(875);
-    expect(result.variants[0]?.syncWarnings).toEqual([]);
-  });
-
-  it('различает zero и malformed counters, ambiguity всегда 0', () => {
-    const menu = {
-      itemCategories: [
-        {
-          items: [
-            { id: 'zero', name: 'Zero', itemSizes: [{ id: 's1', prices: [{ price: 0 }, -2] }] },
-            { id: 'null', name: 'Null', itemSizes: [{ id: 's1', prices: [{ price: null }] }] },
-            { id: 'bad', name: 'Bad', itemSizes: [{ id: 's1', prices: [{ price: 'bad' }] }] },
-          ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants).toHaveLength(0);
-    expect(result.skippedZeroPrice).toBe(1);
-    expect(result.skippedMalformedPrice).toBe(2);
-    expect(result.skippedAmbiguousPrice).toBe(0);
-  });
-
-  it('1107-подобный сценарий: все string цены теперь парсятся, 0 malformed', () => {
-    // Симулируем реальный сценарий: 3 товара с string ценами.
-    const menu = {
-      itemCategories: [
-        {
-          items: [
-            {
-              id: 'item-1',
-              name: 'Pivo 1',
-              itemSizes: [{ id: 's1', prices: [{ price: '2500', organizationId: ORG_ID }] }],
-            },
-            {
-              id: 'item-2',
-              name: 'Pivo 2',
-              itemSizes: [{ id: 's1', prices: [{ price: '3000', organizationId: ORG_ID }] }],
-            },
-            {
-              id: 'item-3',
-              name: 'Pivo 3',
-              itemSizes: [{ id: 's1', prices: [{ price: '1800', organizationId: ORG_ID }] }],
-            },
-          ],
-        },
-      ],
-    };
-    const result = parseExternalMenu(menu, { organizationId: ORG_ID });
-    expect(result.variants).toHaveLength(3);
-    expect(result.skippedMalformedPrice).toBe(0);
-    expect(result.variants.map((v) => v.basePrice).sort((a, b) => a - b)).toEqual([1800, 2500, 3000]);
   });
 });

@@ -26,15 +26,16 @@ export interface SyncMenuSummary {
   sourceMenuId: string | null;
   correlationId: string | null;
   sourceItemCount: number;
-  sourceCategoryCount: number;
-  extractedVariantCount: number;
-  skippedNoSizes: number;
-  skippedHidden: number;
-  skippedZeroPriceCount: number;
-  skippedMalformedCount: number;
-  skippedAmbiguousCount: number;
+  drinkCategoryCount: number;
+  drinkCandidateCount: number;
+  candidateWithFinitePriceCount: number;
+  candidateWithPositivePriceCount: number;
   savedCount: number;
   updatedCount: number;
+  zeroPriceCandidateCount: number;
+  skippedWithoutItemIdCount: number;
+  skippedWithoutPriceCount: number;
+  nonDrinkItemCount: number;
   unavailableCount: number;
   durationMs: number;
   success: boolean;
@@ -42,7 +43,6 @@ export interface SyncMenuSummary {
 }
 
 const SYNC_BATCH_SIZE = 250;
-const NO_SIZE_FALLBACK = '__no_size__';
 
 /**
  * Синхронизация внешнего меню iiko → PostgreSQL. Только чтение из iiko.
@@ -187,8 +187,8 @@ export class IikoSyncService {
 
   /**
    * Синхронизация полного внешнего меню iiko (POST /api/2/menu/by_id).
-   * Извлекает sellable item-size-price variants, upsert их батчами,
-   * помечает пропавшие недоступными. Возвращает только сводку — без сырого меню.
+   * Извлекает drink-candidate item-size variants по алгоритму Python extractor,
+   * сохраняет их батчами и помечает пропавшие недоступными.
    */
   async syncMenu(requestId?: string): Promise<SyncMenuSummary> {
     const startedAt = Date.now();
@@ -241,20 +241,17 @@ export class IikoSyncService {
     for (let i = 0; i < parsed.variants.length; i += SYNC_BATCH_SIZE) {
       const batch = parsed.variants.slice(i, i + SYNC_BATCH_SIZE);
       for (const variant of batch) {
-        const key = `${variant.organizationId}|${variant.iikoItemId}|${variant.iikoSizeId}`;
-        seenKeys.add(key);
+        seenKeys.add(variantKey(variant.organizationId, variant.iikoItemId, variant.iikoSizeId));
         const basePrice = toMoney(variant.basePrice.toString());
-        const existing = await this.prisma.product.findUnique({
+        const existing = await this.prisma.product.findFirst({
           where: {
-            organizationId_iikoItemId_iikoSizeId: {
-              organizationId: organization.id,
-              iikoItemId: variant.iikoItemId,
-              iikoSizeId: variant.iikoSizeId,
-            },
+            organizationId: organization.id,
+            iikoItemId: variant.iikoItemId,
+            iikoSizeId: variant.iikoSizeId,
           },
-          select: { id: true, basePrice: true },
+          select: { id: true },
         });
-        const upsertData = {
+        const syncData = {
           iikoSizeId: variant.iikoSizeId,
           iikoProductId: variant.iikoProductId,
           name: variant.name,
@@ -264,10 +261,12 @@ export class IikoSyncService {
           sku: variant.sku,
           categoryId: variant.categoryId,
           categoryName: variant.categoryName,
+          basePrice: basePrice.toString(),
           currentKnownIikoPrice: basePrice.toString(),
           currency: variant.currency,
+          isDrinkCandidate: variant.isDrinkCandidate,
           isSellable: variant.isSellable,
-          isAvailable: true,
+          isAvailable: variant.isAvailable,
           isActive: true,
           status: 'ACTIVE' as const,
           sourceMenuId: parsed.sourceMenuId,
@@ -277,33 +276,20 @@ export class IikoSyncService {
           lastSeenAt: syncedAt,
           syncedAt,
         };
-        await this.prisma.product.upsert({
-          where: {
-            organizationId_iikoItemId_iikoSizeId: {
-              organizationId: organization.id,
-              iikoItemId: variant.iikoItemId,
-              iikoSizeId: variant.iikoSizeId,
-            },
-          },
-          create: {
-            organizationId: organization.id,
-            iikoItemId: variant.iikoItemId,
-            basePrice: basePrice.toString(),
-            isExchangeProduct: false,
-            priceStep: this.env.PRICE_DEFAULT_STEP.toString(),
-            maxChangePercent: this.env.PRICE_MAX_CHANGE_PERCENT.toString(),
-            ...upsertData,
-          },
-          update: {
-            ...upsertData,
-            // basePrice администратор настраивает вручную; перезаписываем только если он ещё нулевой.
-            basePrice:
-              existing && existing.basePrice.isZero() ? basePrice.toString() : undefined,
-          },
-        });
         if (existing) {
+          await this.prisma.product.update({ where: { id: existing.id }, data: syncData });
           updatedCount += 1;
         } else {
+          await this.prisma.product.create({
+            data: {
+              organizationId: organization.id,
+              iikoItemId: variant.iikoItemId,
+              isExchangeProduct: false,
+              priceStep: this.env.PRICE_DEFAULT_STEP.toString(),
+              maxChangePercent: this.env.PRICE_MAX_CHANGE_PERCENT.toString(),
+              ...syncData,
+            },
+          });
           savedCount += 1;
         }
       }
@@ -323,7 +309,7 @@ export class IikoSyncService {
     });
     const goneIds: string[] = [];
     for (const row of existingAvailable) {
-      const key = `${organization.iikoOrganizationId}|${row.iikoItemId}|${row.iikoSizeId ?? NO_SIZE_FALLBACK}`;
+      const key = variantKey(organization.iikoOrganizationId, row.iikoItemId, row.iikoSizeId);
       if (!seenKeys.has(key)) goneIds.push(row.id);
     }
     const unavailable =
@@ -340,15 +326,16 @@ export class IikoSyncService {
       sourceMenuId: parsed.sourceMenuId,
       correlationId: parsed.correlationId,
       sourceItemCount: parsed.sourceItemCount,
-      sourceCategoryCount: parsed.sourceCategoryCount,
-      extractedVariantCount: parsed.variants.length,
-      skippedNoSizes: parsed.skippedNoSizes,
-      skippedHidden: parsed.skippedHidden,
-      skippedZeroPriceCount: parsed.skippedZeroPrice,
-      skippedMalformedCount: parsed.skippedMalformedPrice,
-      skippedAmbiguousCount: parsed.skippedAmbiguousPrice,
+      drinkCategoryCount: parsed.drinkCategoryCount,
+      drinkCandidateCount: parsed.drinkCandidateCount,
+      candidateWithFinitePriceCount: parsed.candidateWithFinitePriceCount,
+      candidateWithPositivePriceCount: parsed.candidateWithPositivePriceCount,
       savedCount,
       updatedCount,
+      zeroPriceCandidateCount: parsed.zeroPriceCandidateCount,
+      skippedWithoutItemIdCount: parsed.skippedWithoutItemIdCount,
+      skippedWithoutPriceCount: parsed.skippedWithoutPriceCount,
+      nonDrinkItemCount: parsed.nonDrinkItemCount,
       unavailableCount: unavailable.count,
       durationMs: Date.now() - startedAt,
       success: true,
@@ -390,15 +377,16 @@ export class IikoSyncService {
       sourceMenuId: null,
       correlationId,
       sourceItemCount: 0,
-      sourceCategoryCount: 0,
-      extractedVariantCount: 0,
-      skippedNoSizes: 0,
-      skippedHidden: 0,
-      skippedZeroPriceCount: 0,
-      skippedMalformedCount: 0,
-      skippedAmbiguousCount: 0,
+      drinkCategoryCount: 0,
+      drinkCandidateCount: 0,
+      candidateWithFinitePriceCount: 0,
+      candidateWithPositivePriceCount: 0,
       savedCount: 0,
       updatedCount: 0,
+      zeroPriceCandidateCount: 0,
+      skippedWithoutItemIdCount: 0,
+      skippedWithoutPriceCount: 0,
+      nonDrinkItemCount: 0,
       unavailableCount: 0,
       durationMs,
       success: false,
@@ -414,15 +402,16 @@ export class IikoSyncService {
     // Сводка без сырого тела меню.
     const safeMetadata = {
       sourceItemCount: summary.sourceItemCount,
-      sourceCategoryCount: summary.sourceCategoryCount,
-      extractedVariantCount: summary.extractedVariantCount,
-      skippedNoSizes: summary.skippedNoSizes,
-      skippedHidden: summary.skippedHidden,
-      skippedZeroPriceCount: summary.skippedZeroPriceCount,
-      skippedMalformedCount: summary.skippedMalformedCount,
-      skippedAmbiguousCount: summary.skippedAmbiguousCount,
+      drinkCategoryCount: summary.drinkCategoryCount,
+      drinkCandidateCount: summary.drinkCandidateCount,
+      candidateWithFinitePriceCount: summary.candidateWithFinitePriceCount,
+      candidateWithPositivePriceCount: summary.candidateWithPositivePriceCount,
       savedCount: summary.savedCount,
       updatedCount: summary.updatedCount,
+      zeroPriceCandidateCount: summary.zeroPriceCandidateCount,
+      skippedWithoutItemIdCount: summary.skippedWithoutItemIdCount,
+      skippedWithoutPriceCount: summary.skippedWithoutPriceCount,
+      nonDrinkItemCount: summary.nonDrinkItemCount,
       unavailableCount: summary.unavailableCount,
       durationMs: summary.durationMs,
       correlationId: summary.correlationId,
@@ -435,7 +424,7 @@ export class IikoSyncService {
       organizationId,
       requestId: requestId ?? null,
       summary: summary.success
-        ? `Синхронизация меню: ${summary.extractedVariantCount} вариантов, ${summary.sourceItemCount} товаров, ${summary.sourceCategoryCount} категорий`
+        ? `Синхронизация меню: ${summary.drinkCandidateCount} напитков-кандидатов, ${summary.candidateWithPositivePriceCount} вариантов с положительной ценой; товаров биржи выбрано отдельно`
         : `Синхронизация меню не удалась: ${summary.error ?? 'ошибка'}`,
       metadata: safeMetadata,
     });
@@ -465,4 +454,8 @@ export class IikoSyncService {
       throw validationError('Организация не совпадает с выбранной');
     }
   }
+}
+
+function variantKey(organizationId: string, iikoItemId: string, iikoSizeId: string | null): string {
+  return JSON.stringify([organizationId, iikoItemId, iikoSizeId]);
 }

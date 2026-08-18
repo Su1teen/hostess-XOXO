@@ -8,6 +8,7 @@ export interface ProductListParams {
   pageSize?: number;
   search?: string;
   category?: string;
+  drinkCandidatesOnly?: boolean;
   sellableOnly?: boolean;
   exchangeOnly?: boolean;
   activeOnly?: boolean;
@@ -59,6 +60,9 @@ export class ProductsService {
     }
     if (params.category && params.category.trim().length > 0) {
       where.categoryName = params.category.trim();
+    }
+    if (params.drinkCandidatesOnly ?? true) {
+      where.isDrinkCandidate = true;
     }
     if (params.sellableOnly ?? true) {
       where.isSellable = true;
@@ -235,21 +239,29 @@ export class ProductsService {
   }
 
   async counts() {
-    const [total, exchange, active, sellable, available] = await Promise.all([
+    const [total, drinkCandidates, exchange, active, sellable, available] = await Promise.all([
       this.prisma.product.count(),
+      this.prisma.product.count({ where: { isDrinkCandidate: true } }),
       this.prisma.product.count({ where: { isExchangeProduct: true } }),
       this.prisma.product.count({ where: { isActive: true } }),
       this.prisma.product.count({ where: { isSellable: true } }),
       this.prisma.product.count({ where: { isAvailable: true } }),
     ]);
-    return { total, exchange, active, sellable, available };
+    return { total, drinkCandidates, exchange, active, sellable, available };
   }
 
   /** Категории с количеством sellable+available вариантов. */
-  async listCategories(params: { sellableOnly?: boolean; availableOnly?: boolean } = {}) {
+  async listCategories(
+    params: {
+      drinkCandidatesOnly?: boolean;
+      sellableOnly?: boolean;
+      availableOnly?: boolean;
+    } = {},
+  ) {
     const where: Prisma.ProductWhereInput = {
       categoryName: { not: null },
     };
+    if (params.drinkCandidatesOnly ?? true) where.isDrinkCandidate = true;
     if (params.sellableOnly ?? true) where.isSellable = true;
     if (params.availableOnly ?? true) where.isAvailable = true;
 

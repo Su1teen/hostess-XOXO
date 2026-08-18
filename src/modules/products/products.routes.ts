@@ -8,6 +8,7 @@ interface ProductQuery {
   pageSize?: number;
   search?: string;
   category?: string;
+  drinkCandidatesOnly?: boolean;
   sellableOnly?: boolean;
   exchangeOnly?: boolean;
   activeOnly?: boolean;
@@ -41,6 +42,7 @@ export async function productsRoutes(app: FastifyInstance): Promise<void> {
             pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
             search: { type: 'string' },
             category: { type: 'string' },
+            drinkCandidatesOnly: { type: 'boolean', default: true },
             sellableOnly: { type: 'boolean', default: true },
             exchangeOnly: { type: 'boolean', default: false },
             activeOnly: { type: 'boolean', default: true },
@@ -62,6 +64,7 @@ export async function productsRoutes(app: FastifyInstance): Promise<void> {
         filters: {
           search: request.query.search ?? null,
           category: request.query.category ?? null,
+          drinkCandidatesOnly: request.query.drinkCandidatesOnly ?? true,
           sellableOnly: request.query.sellableOnly ?? true,
           exchangeOnly: request.query.exchangeOnly ?? false,
           activeOnly: request.query.activeOnly ?? true,
@@ -71,7 +74,13 @@ export async function productsRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  app.get<{ Querystring: { sellableOnly?: boolean; availableOnly?: boolean } }>(
+  app.get<{
+    Querystring: {
+      drinkCandidatesOnly?: boolean;
+      sellableOnly?: boolean;
+      availableOnly?: boolean;
+    };
+  }>(
     `${API_PREFIX}/admin/products/categories`,
     {
       preHandler: app.requireAdmin,
@@ -83,6 +92,7 @@ export async function productsRoutes(app: FastifyInstance): Promise<void> {
           type: 'object',
           additionalProperties: false,
           properties: {
+            drinkCandidatesOnly: { type: 'boolean', default: true },
             sellableOnly: { type: 'boolean', default: true },
             availableOnly: { type: 'boolean', default: true },
           },
@@ -91,6 +101,7 @@ export async function productsRoutes(app: FastifyInstance): Promise<void> {
     },
     async (request) => {
       const items = await app.services.products.listCategories({
+        drinkCandidatesOnly: request.query.drinkCandidatesOnly,
         sellableOnly: request.query.sellableOnly,
         availableOnly: request.query.availableOnly,
       });
@@ -202,7 +213,9 @@ function serializeProduct(product: Product) {
     sizeName: product.sizeName,
     sizeCode: product.sizeCode,
     iikoItemId: product.iikoItemId,
+    iikoItemIdShort: shortId(product.iikoItemId),
     iikoSizeId: product.iikoSizeId,
+    iikoSizeIdShort: product.iikoSizeId ? shortId(product.iikoSizeId) : null,
     iikoProductId: product.iikoProductId,
     iikoProductIdShort: shortId(product.iikoProductId ?? product.iikoItemId),
     sku: product.sku,
@@ -221,6 +234,7 @@ function serializeProduct(product: Product) {
     maxPrice: product.maxPrice === null ? null : Number(product.maxPrice.toString()),
     priceStep: Number(product.priceStep.toString()),
     maxChangePercent: Number(product.maxChangePercent.toString()),
+    isDrinkCandidate: product.isDrinkCandidate,
     isSellable: product.isSellable,
     isAvailable: product.isAvailable,
     isExchangeProduct: product.isExchangeProduct,
