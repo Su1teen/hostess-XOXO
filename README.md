@@ -24,7 +24,7 @@ Backend системы динамических цен бара «Bar Exchange»
 cp .env.example .env      # заполните DATABASE_URL и ADMIN_API_KEY
 npm install
 npm run db:migrate:dev
-npm run db:seed           # демо-товары для локальной разработки
+npm run db:seed           # ровно 27 идемпотентных exchange products
 npm run dev
 ```
 
@@ -45,13 +45,14 @@ open http://localhost:3000/admin    # страница диагностики (R
 | --------------------------- | ------------------------------------ |
 | `npm run dev`               | Локальный запуск с автоперезагрузкой |
 | `npm run build`             | Сборка в `dist/`                     |
+| `npm run typecheck`         | Проверка типов production-кода       |
 | `npm start`                 | Запуск собранного сервера            |
 | `npm run lint`              | ESLint без предупреждений            |
 | `npm run format`            | Prettier                             |
 | `npm test`                  | Vitest                               |
 | `npm run db:migrate:dev`    | Миграции для разработки              |
 | `npm run db:migrate:deploy` | Миграции для production              |
-| `npm run db:seed`           | Демо-данные                          |
+| `npm run db:seed`           | 27 идемпотентных exchange products     |
 | `npm run cron:simulate`     | Одна симуляция следующего раунда     |
 
 ## API
@@ -60,9 +61,11 @@ open http://localhost:3000/admin    # страница диагностики (R
 
 - `GET /health`
 - `GET /api/v1/public/health`
-- `GET /api/v1/public/current-round`
-- `GET /api/v1/public/prices`
-- `GET /api/v1/public/products`
+- `GET /api/v1/public/current-round` (legacy alias)
+- `GET /api/v1/public/prices` (legacy alias)
+- `GET /api/v1/public/products` — только активные биржевые товары
+- `GET /api/v1/public/rounds/current` — опубликованный текущий раунд и цены
+- `GET /api/v1/public/rounds/next` — начало следующего раунда и countdown
 
 Административное (`x-admin-api-key`):
 
@@ -75,6 +78,7 @@ open http://localhost:3000/admin    # страница диагностики (R
   `POST /api/v1/admin/products/:id/select-for-exchange`,
   `POST /api/v1/admin/products/:id/remove-from-exchange`
 - `GET|POST /api/v1/admin/rounds…` (`simulate`, `approve`, `publish`, `rollback`, `manual-export`)
+- `POST /api/v1/admin/rounds/:roundId/sales/increment` — тестовый атомарный increment продаж
 - `POST /api/v1/admin/telegram/test`
 
 Интеграции:
@@ -99,6 +103,20 @@ open http://localhost:3000/admin    # страница диагностики (R
 - Helmet, CORS-allowlist, rate-limit (жёстче для admin/webhook/plugin), лимит тела запроса.
 - В production не отдаются стектрейсы; сырые payload-ы iiko логируются только при
   `IIKO_DEBUG_RAW_PAYLOADS=true` и проходят редакцию.
+
+## Exchange foundation (этап 1)
+
+Для migration и production используйте `npm run db:migrate:deploy`, для локальной разработки —
+`npm run db:migrate:dev`, затем `npm run db:seed`. Seed не импортирует `drinks_output.json`, не
+создаёт iiko товары и безопасен для повторного запуска: ключи `exchange-01`…`exchange-27`
+уникальны. Для этих позиций iiko IDs nullable и не используются в расчёте. `maxPrice` временно
+равен `startPrice * 1.5`, округлённому до `priceStep` (50 KZT). Все цены — Decimal в KZT.
+
+Сервис продаж и модель `ExchangeSale` подготовлены для будущей панели бармена, но сама панель
+не входит в этот этап. Автоматический cron и crash-обвалы не запускаются; `CRASH` и
+`CrashEvent` существуют только как foundation. iiko остаётся read-only, iikoFront plugin не
+подключается. Для CI/локального окружения нужны `DATABASE_URL` и `ADMIN_API_KEY` (минимум 16
+символов); остальные переменные имеют значения по умолчанию из `.env.example`.
 
 ## Ограничения v0.1 и планы
 

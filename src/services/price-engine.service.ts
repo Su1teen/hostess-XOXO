@@ -18,6 +18,13 @@ import {
   toMoney,
 } from '../lib/money.js';
 
+export function calculateDemandScore(quantity: MoneyInput, average: MoneyInput): Decimal {
+  const sales = toDecimal(quantity);
+  const avg = toDecimal(average);
+  if (avg.isZero()) return new Decimal(0);
+  return sales.minus(avg).div(Decimal.max(avg, 1)).clamp(-1, 1);
+}
+
 export interface PriceCalculationRequest {
   productId: string;
   productName: string;

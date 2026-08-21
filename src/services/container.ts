@@ -3,6 +3,7 @@ import type { AppEnv } from '../config/env.js';
 import { IikoSyncService } from '../modules/iiko/iiko.service.js';
 import { ProductsService } from '../modules/products/products.service.js';
 import { RoundsService } from '../modules/rounds/rounds.service.js';
+import { SalesService } from '../modules/sales/sales.service.js';
 import { AuditService } from './audit.service.js';
 import { IikoClient, type IikoLogger } from './iiko-client.service.js';
 import { createPricePublisher, type PricePublisher } from './price-publisher.service.js';
@@ -15,6 +16,7 @@ export interface AppServices {
   telegram: TelegramService;
   products: ProductsService;
   rounds: RoundsService;
+  sales: SalesService;
   pricePublisher: PricePublisher;
 }
 
@@ -61,8 +63,9 @@ export function createServices(
 
   const products = new ProductsService(prisma, audit);
   const rounds = new RoundsService(prisma, env, audit);
+  const sales = new SalesService(prisma);
   const iikoSync = new IikoSyncService(prisma, env, iikoClient, audit, telegram);
   const pricePublisher = createPricePublisher(env, rounds);
 
-  return { audit, iikoClient, iikoSync, telegram, products, rounds, pricePublisher };
+  return { audit, iikoClient, iikoSync, telegram, products, rounds, sales, pricePublisher };
 }

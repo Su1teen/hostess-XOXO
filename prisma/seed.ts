@@ -1,65 +1,70 @@
 import { PrismaClient } from '@prisma/client';
+import { Decimal } from 'decimal.js';
 
-/**
- * Демо-данные для локальной разработки: одна организация и несколько напитков,
- * помеченных как биржевые. Реальные данные iiko при этом не используются —
- * iikoProductId сгенерированы локально и не совпадают с продакшеном.
- */
 const prisma = new PrismaClient();
-
 const DEMO_ORG_ID = '00000000-0000-4000-8000-000000000001';
+const PRICE_STEP = 50;
 
 interface SeedProduct {
-  iikoProductId: string;
+  key: string;
   name: string;
-  basePrice: number;
+  category: string;
+  startPrice: number;
   minPrice: number;
-  maxPrice: number;
-  isExchangeProduct: boolean;
+  volumeMl: number | null;
 }
 
 const products: SeedProduct[] = [
-  {
-    iikoProductId: '00000000-0000-4000-8000-000000000101',
-    name: 'Gin Tonic',
-    basePrice: 2900,
-    minPrice: 2400,
-    maxPrice: 4200,
-    isExchangeProduct: true,
-  },
-  {
-    iikoProductId: '00000000-0000-4000-8000-000000000102',
-    name: 'Негрони',
-    basePrice: 3500,
-    minPrice: 3000,
-    maxPrice: 5000,
-    isExchangeProduct: true,
-  },
-  {
-    iikoProductId: '00000000-0000-4000-8000-000000000103',
-    name: 'Апероль Шприц',
-    basePrice: 3200,
-    minPrice: 2700,
-    maxPrice: 4600,
-    isExchangeProduct: true,
-  },
-  {
-    iikoProductId: '00000000-0000-4000-8000-000000000104',
-    name: 'Пиво светлое 0.5',
-    basePrice: 1800,
-    minPrice: 1500,
-    maxPrice: 2600,
-    isExchangeProduct: true,
-  },
-  {
-    iikoProductId: '00000000-0000-4000-8000-000000000105',
-    name: 'Espresso',
-    basePrice: 900,
-    minPrice: 700,
-    maxPrice: 1400,
-    isExchangeProduct: false,
-  },
-];
+  ['Немецкое', 'Крепкий алкоголь', 1190, 790, 50],
+  ['Джин Beefeater', 'Крепкий алкоголь', 2000, 1590, 50],
+  ['Jägermeister', 'Крепкий алкоголь', 2000, 1590, 50],
+  ['Oakheart', 'Крепкий алкоголь', 2000, 1590, 50],
+  ['Bacardi Black', 'Крепкий алкоголь', 1600, 1190, 50],
+  ['Ballantines', 'Крепкий алкоголь', 2000, 1590, 50],
+  ['Jameson', 'Крепкий алкоголь', 2000, 1590, 50],
+  ['Chivas', 'Крепкий алкоголь', 3000, 2590, 50],
+  ['Jack Daniels', 'Крепкий алкоголь', 3000, 2590, 50],
+  ['Monkey Shoulder', 'Крепкий алкоголь', 3500, 2990, 50],
+  ['Absolut', 'Крепкий алкоголь', 1450, 990, 50],
+  ['Nemiroff', 'Крепкий алкоголь', 1300, 890, 50],
+  ['Хортица Айс', 'Крепкий алкоголь', 890, 590, 50],
+  ['Кызылжар', 'Крепкий алкоголь', 790, 590, 50],
+  ['Миллер', 'Бутылочное пиво', 1650, 990, null],
+  ['Bud', 'Бутылочное пиво', 2190, 990, null],
+  ['Corona Extra', 'Бутылочное пиво', 2990, 2590, null],
+  ['Paulaner', 'Бутылочное пиво', 2500, 1990, null],
+  ['Tsingtao', 'Бутылочное пиво', 2500, 1990, null],
+  ['Hoegaarden', 'Бутылочное пиво', 2500, 1990, null],
+  ['Red Bull Vodka', 'Коктейли', 3200, 2190, null],
+  ['Red Bull Jäger', 'Коктейли', 3200, 2190, null],
+  ['Gin Tonic', 'Коктейли', 3200, 2190, null],
+  ['Red Bull Whiskey', 'Коктейли', 3200, 2190, null],
+  ['Mojito', 'Коктейли', 2800, 1890, null],
+  ['Long Island', 'Коктейли', 3500, 2490, null],
+  ['Whiskey Sour', 'Коктейли', 3200, 2190, null],
+].map(([name, category, startPrice, minPrice, volumeMl], index) => ({
+  key: `exchange-${String(index + 1).padStart(2, '0')}`,
+  name: name as string,
+  category: category as string,
+  startPrice: startPrice as number,
+  minPrice: minPrice as number,
+  volumeMl: volumeMl as number | null,
+}));
+
+function temporaryMaxPrice(startPrice: number): string {
+  return new Decimal(startPrice)
+    .mul('1.5')
+    .div(PRICE_STEP)
+    .toDecimalPlaces(0)
+    .mul(PRICE_STEP)
+    .toFixed(2);
+}
+
+function isLegacySeed(value: unknown): boolean {
+  return (
+    typeof value === 'object' && value !== null && (value as { seeded?: unknown }).seeded === true
+  );
+}
 
 async function main(): Promise<void> {
   const organization = await prisma.organization.upsert({
@@ -74,63 +79,80 @@ async function main(): Promise<void> {
     },
   });
 
-  const group = await prisma.productGroup.upsert({
-    where: {
-      organizationId_iikoGroupId: {
-        organizationId: organization.id,
-        iikoGroupId: '00000000-0000-4000-8000-0000000000a1',
-      },
-    },
-    update: { name: 'Бар', path: 'Бар' },
-    create: {
-      organizationId: organization.id,
-      iikoGroupId: '00000000-0000-4000-8000-0000000000a1',
-      name: 'Бар',
-      path: 'Бар',
-    },
-  });
-
   for (const product of products) {
+    const maxPrice = temporaryMaxPrice(product.startPrice);
     await prisma.product.upsert({
-      where: {
-        organizationId_iikoProductId: {
-          organizationId: organization.id,
-          iikoProductId: product.iikoProductId,
-        },
-      },
+      where: { exchangeKey: product.key },
       update: {
         name: product.name,
-        basePrice: product.basePrice,
+        displayName: product.name,
+        category: product.category,
+        categoryName: product.category,
+        volumeMl: product.volumeMl,
+        startPrice: product.startPrice,
+        currentPrice: product.startPrice,
+        basePrice: product.startPrice,
+        currentExchangePrice: product.startPrice,
         minPrice: product.minPrice,
-        maxPrice: product.maxPrice,
-        isExchangeProduct: product.isExchangeProduct,
+        maxPrice,
+        priceStep: PRICE_STEP,
+        maxChangePercent: 10,
+        currency: 'KZT',
+        isExchangeProduct: true,
         isActive: true,
+        isSellable: true,
+        isAvailable: true,
         status: 'ACTIVE',
       },
       create: {
         organizationId: organization.id,
-        iikoProductId: product.iikoProductId,
-        iikoParentGroupId: group.iikoGroupId,
+        exchangeKey: product.key,
         name: product.name,
-        unit: 'порция',
-        productType: 'Dish',
-        basePrice: product.basePrice,
-        currentKnownIikoPrice: product.basePrice,
-        currentExchangePrice: product.basePrice,
+        displayName: product.name,
+        category: product.category,
+        categoryName: product.category,
+        volumeMl: product.volumeMl,
+        startPrice: product.startPrice,
+        currentPrice: product.startPrice,
+        basePrice: product.startPrice,
+        currentExchangePrice: product.startPrice,
         minPrice: product.minPrice,
-        maxPrice: product.maxPrice,
-        priceStep: 50,
+        maxPrice,
+        priceStep: PRICE_STEP,
         maxChangePercent: 10,
-        isExchangeProduct: product.isExchangeProduct,
-        metadata: { iikoGroupPath: group.path, seeded: true },
-        syncedAt: new Date(),
+        currency: 'KZT',
+        isExchangeProduct: true,
+        isActive: true,
+        isSellable: true,
+        isAvailable: true,
+        status: 'ACTIVE',
+        unit: product.volumeMl ? 'порция' : 'позиция',
+        productType: 'ExchangeProduct',
+        metadata: { seeded: true, maxPricePolicy: 'startPrice * 1.5 rounded to priceStep' },
       },
     });
   }
 
-  const exchangeCount = products.filter((product) => product.isExchangeProduct).length;
+  // Старый demo seed создавал 5 iiko-записей без exchangeKey. Не удаляем их,
+  // но выводим из биржи, чтобы повторный deploy оставлял ровно 27 foundation-позиций.
+  const legacySeeded = await prisma.product.findMany({
+    where: { organizationId: organization.id, exchangeKey: null, isExchangeProduct: true },
+    select: { id: true, metadata: true },
+  });
+  for (const product of legacySeeded) {
+    if (isLegacySeed(product.metadata)) {
+      await prisma.product.update({
+        where: { id: product.id },
+        data: { isExchangeProduct: false },
+      });
+    }
+  }
+
+  const count = await prisma.product.count({
+    where: { organizationId: organization.id, isExchangeProduct: true, isActive: true },
+  });
   process.stdout.write(
-    `Seed выполнен: организация «${organization.name}», товаров ${products.length}, из них биржевых ${exchangeCount}.\n`,
+    `Seed выполнен: биржевых товаров ${count} (ожидалось ${products.length}).\n`,
   );
 }
 
@@ -140,6 +162,4 @@ main()
     process.stderr.write(`Seed завершился ошибкой: ${message}\n`);
     process.exitCode = 1;
   })
-  .finally(() => {
-    void prisma.$disconnect();
-  });
+  .finally(() => void prisma.$disconnect());

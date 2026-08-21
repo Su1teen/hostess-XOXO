@@ -1,14 +1,14 @@
 /** Версия алгоритма расчёта цены. Меняйте при изменении формулы. */
-export const PRICE_ALGORITHM_VERSION = 'v0.1-linear-demand';
+export const PRICE_ALGORITHM_VERSION = 'v0.2-round-demand';
 
 /**
  * Коэффициент чувствительности цены к спросу.
  * nextPrice = clamp(roundToStep(currentPrice * (1 + K_DEMAND_SENSITIVITY * demandScore), step), min, max)
  *
- * K = 0.2 означает: demandScore = 1.0 даёт +20% до применения ограничений
+ * K = 0.1 означает: demandScore = 1.0 даёт +10% до применения ограничений
  * (maxChangePercent и min/max всё равно обрезают результат).
  */
-export const K_DEMAND_SENSITIVITY = 0.2;
+export const K_DEMAND_SENSITIVITY = 0.1;
 
 /** Валюта v0.1. */
 export const CURRENCY = 'KZT';

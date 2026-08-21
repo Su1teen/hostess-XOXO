@@ -309,6 +309,7 @@ export class IikoSyncService {
     });
     const goneIds: string[] = [];
     for (const row of existingAvailable) {
+      if (!row.iikoItemId) continue;
       const key = variantKey(organization.iikoOrganizationId, row.iikoItemId, row.iikoSizeId);
       if (!seenKeys.has(key)) goneIds.push(row.id);
     }

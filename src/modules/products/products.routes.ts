@@ -213,11 +213,14 @@ function serializeProduct(product: Product) {
     sizeName: product.sizeName,
     sizeCode: product.sizeCode,
     iikoItemId: product.iikoItemId,
-    iikoItemIdShort: shortId(product.iikoItemId),
+    iikoItemIdShort: product.iikoItemId ? shortId(product.iikoItemId) : null,
     iikoSizeId: product.iikoSizeId,
     iikoSizeIdShort: product.iikoSizeId ? shortId(product.iikoSizeId) : null,
     iikoProductId: product.iikoProductId,
-    iikoProductIdShort: shortId(product.iikoProductId ?? product.iikoItemId),
+    iikoProductIdShort:
+      product.iikoProductId || product.iikoItemId
+        ? shortId(product.iikoProductId ?? product.iikoItemId!)
+        : null,
     sku: product.sku,
     categoryName: product.categoryName,
     currency: product.currency ?? CURRENCY,

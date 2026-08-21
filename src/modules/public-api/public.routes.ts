@@ -1,10 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { API_PREFIX, CURRENCY } from '../../config/constants.js';
 import { toNumber } from '../../lib/money.js';
+import { getNextRound } from '../../lib/time.js';
 import type { RoundWithPrices } from '../rounds/rounds.service.js';
 
 const publicProductSchema = {
   type: 'object',
+  required: ['id', 'name', 'price', 'currency', 'previousPrice', 'changePercent', 'isAvailable'],
+  additionalProperties: false,
   properties: {
     id: { type: 'string' },
     name: { type: 'string' },
@@ -18,12 +21,16 @@ const publicProductSchema = {
 
 const publicPayloadSchema = {
   type: 'object',
+  required: ['generatedAt', 'timezone', 'status', 'currentRound', 'products'],
+  additionalProperties: false,
   properties: {
     generatedAt: { type: 'string' },
     timezone: { type: 'string' },
     status: { type: 'string', enum: ['ok', 'no_published_round'] },
     currentRound: {
       type: ['object', 'null'],
+      required: ['id', 'roundKey', 'startsAt', 'endsAt', 'status'],
+      additionalProperties: false,
       properties: {
         id: { type: 'string' },
         roundKey: { type: 'string' },
@@ -81,6 +88,56 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
       },
     },
     async () => buildPayload(),
+  );
+
+  app.get(
+    `${API_PREFIX}/public/rounds/current`,
+    {
+      config: { rateLimit: { max: 240, timeWindow: '1 minute' } },
+      schema: {
+        tags: ['Public'],
+        summary: 'Текущий опубликованный раунд',
+        response: { 200: publicPayloadSchema },
+      },
+    },
+    async () => buildPayload(),
+  );
+
+  app.get(
+    `${API_PREFIX}/public/rounds/next`,
+    {
+      config: { rateLimit: { max: 240, timeWindow: '1 minute' } },
+      schema: {
+        tags: ['Public'],
+        summary: 'Время следующего 15-минутного раунда',
+        response: {
+          200: {
+            type: 'object',
+            required: ['startsAt', 'endsAt', 'roundKey', 'countdownSeconds', 'intervalMinutes'],
+            properties: {
+              roundKey: { type: 'string' },
+              startsAt: { type: 'string' },
+              endsAt: { type: 'string' },
+              countdownSeconds: { type: 'integer' },
+              intervalMinutes: { type: 'integer' },
+              timezone: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+    async () => {
+      const now = new Date();
+      const next = getNextRound(now, app.env.APP_TIMEZONE, app.env.PRICE_ROUND_INTERVAL_MINUTES);
+      return {
+        roundKey: next.roundKey,
+        startsAt: next.startsAt.toISOString(),
+        endsAt: next.endsAt.toISOString(),
+        countdownSeconds: Math.max(0, Math.ceil((next.startsAt.getTime() - now.getTime()) / 1000)),
+        intervalMinutes: app.env.PRICE_ROUND_INTERVAL_MINUTES,
+        timezone: app.env.APP_TIMEZONE,
+      };
+    },
   );
 
   app.get(
@@ -147,7 +204,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
 
 function mapProducts(round: RoundWithPrices) {
   return round.prices
-    .filter((price) => price.product.isExchangeProduct)
+    .filter((price) => price.product.isExchangeProduct && price.product.isActive)
     .map((price) => ({
       id: price.product.id,
       name: price.product.name,

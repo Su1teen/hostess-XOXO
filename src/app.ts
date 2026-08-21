@@ -10,6 +10,7 @@ import { iikoRoutes } from './modules/iiko/iiko.routes.js';
 import { productsRoutes } from './modules/products/products.routes.js';
 import { publicRoutes } from './modules/public-api/public.routes.js';
 import { roundsRoutes } from './modules/rounds/rounds.routes.js';
+import { salesRoutes } from './modules/sales/sales.routes.js';
 import { telegramRoutes } from './modules/telegram/telegram.routes.js';
 import { webhookRoutes } from './modules/webhooks/webhooks.routes.js';
 import { authPlugin } from './plugins/auth.js';
@@ -53,6 +54,7 @@ export async function buildApp(env: AppEnv = getEnv()): Promise<FastifyInstance>
   await app.register(iikoRoutes);
   await app.register(productsRoutes);
   await app.register(roundsRoutes);
+  await app.register(salesRoutes);
   await app.register(telegramRoutes);
   await app.register(webhookRoutes);
   await app.register(frontPluginRoutes);

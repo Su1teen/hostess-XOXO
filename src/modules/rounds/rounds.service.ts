@@ -11,7 +11,7 @@ import {
 import { toMoney } from '../../lib/money.js';
 import { getCurrentRound, getNextRound, getRoundForInstant, getRoundKey } from '../../lib/time.js';
 import type { AuditService } from '../../services/audit.service.js';
-import { calculateNextPrice } from '../../services/price-engine.service.js';
+import { calculateDemandScore, calculateNextPrice } from '../../services/price-engine.service.js';
 
 export interface DemandOverride {
   productId: string;
@@ -104,27 +104,45 @@ export class RoundsService {
     });
     if (products.length === 0) throw noExchangeProducts();
 
+    const currentRound = await this.prisma.priceRound.findFirst({
+      where: { status: 'PUBLISHED', startsAt: { lte: new Date() }, endsAt: { gt: new Date() } },
+      orderBy: { startsAt: 'desc' },
+    });
+    const sales = currentRound
+      ? await this.prisma.exchangeSale.findMany({ where: { roundId: currentRound.id } })
+      : [];
+    const salesByProduct = new Map(sales.map((sale) => [sale.productId, sale.quantity]));
+    const totalSales = products.reduce(
+      (sum, product) => sum + (salesByProduct.get(product.id) ?? 0),
+      0,
+    );
+    const averageSales = totalSales / products.length;
     const overrides = new Map(
       (options.demandOverrides ?? []).map((override) => [override.productId, override]),
     );
 
     const priceRows = products.map((product) => {
       const override = overrides.get(product.id);
+      const salesQuantity = override?.salesQuantity ?? salesByProduct.get(product.id) ?? 0;
+      const demandScore = calculateDemandScore(salesQuantity, averageSales);
       const calculation = calculateNextPrice({
         productId: product.id,
         productName: product.name,
-        currentPrice: product.currentExchangePrice ?? product.basePrice,
-        basePrice: product.basePrice,
+        currentPrice: product.currentPrice ?? product.currentExchangePrice ?? product.basePrice,
+        basePrice: product.startPrice ?? product.basePrice,
         minPrice: product.minPrice,
         maxPrice: product.maxPrice,
         priceStep: product.priceStep,
         maxChangePercent: product.maxChangePercent,
-        demandScore: override?.demandScore ?? 0,
-        salesQuantity: override?.salesQuantity ?? 0,
+        demandScore: override?.demandScore ?? demandScore,
+        salesQuantity,
+        k: 0.1,
       });
 
       return {
         productId: product.id,
+        price: calculation.calculatedPrice.toString(),
+        soldQuantity: calculation.salesQuantity.toString(),
         previousPrice: calculation.previousPrice.toString(),
         calculatedPrice: calculation.calculatedPrice.toString(),
         minPrice: calculation.minPrice.toString(),
@@ -250,7 +268,10 @@ export class RoundsService {
         });
         await tx.product.update({
           where: { id: price.productId },
-          data: { currentExchangePrice: price.calculatedPrice },
+          data: {
+            currentExchangePrice: price.calculatedPrice,
+            currentPrice: price.calculatedPrice,
+          },
         });
       }
       return tx.priceRound.update({
@@ -329,20 +350,14 @@ export class RoundsService {
     return { round: result, restoredRoundKey: previous?.roundKey ?? null };
   }
 
-  /** Текущий опубликованный раунд, покрывающий момент `at`, иначе последний опубликованный. */
+  /** Только активный опубликованный раунд, покрывающий момент `at`. */
   async getCurrentPublishedRound(at: Date = new Date()): Promise<RoundWithPrices | null> {
     const active = await this.prisma.priceRound.findFirst({
       where: { status: 'PUBLISHED', startsAt: { lte: at }, endsAt: { gt: at } },
       orderBy: { startsAt: 'desc' },
       include: ROUND_INCLUDE,
     });
-    if (active) return active;
-
-    return this.prisma.priceRound.findFirst({
-      where: { status: 'PUBLISHED', startsAt: { lte: at } },
-      orderBy: { startsAt: 'desc' },
-      include: ROUND_INCLUDE,
-    });
+    return active;
   }
 
   async getLatestSimulatedRound(): Promise<PriceRound | null> {

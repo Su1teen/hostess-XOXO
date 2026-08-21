@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AppError } from '../src/lib/errors.js';
-import { calculateNextPrice } from '../src/services/price-engine.service.js';
+import { calculateDemandScore, calculateNextPrice } from '../src/services/price-engine.service.js';
 
 function request(overrides: Partial<Parameters<typeof calculateNextPrice>[0]> = {}) {
   return calculateNextPrice({
@@ -17,6 +17,14 @@ function request(overrides: Partial<Parameters<typeof calculateNextPrice>[0]> = 
     ...overrides,
   });
 }
+
+describe('calculateDemandScore', () => {
+  it('считает относительный спрос и clamp-ит его', () => {
+    expect(calculateDemandScore(4, 2).toNumber()).toBe(1);
+    expect(calculateDemandScore(1, 2).toNumber()).toBe(-0.5);
+    expect(calculateDemandScore(4, 0).toNumber()).toBe(0);
+  });
+});
 
 describe('calculateNextPrice', () => {
   it('нулевой спрос не меняет цену', () => {
@@ -46,10 +54,10 @@ describe('calculateNextPrice', () => {
 
   it('ограничивает большое изменение maxChangePercent', () => {
     // demandScore = 1 даёт +20%, но maxChangePercent = 10 разрешает только 3300.
-    const calculation = request({ demandScore: 1, maxChangePercent: 10 });
-    expect(calculation.calculatedPrice.toString()).toBe('3300');
+    const calculation = request({ demandScore: 1, maxChangePercent: 5 });
+    expect(calculation.calculatedPrice.toString()).toBe('3150');
     expect(calculation.result.clampedByMaxChangePercent).toBe(true);
-    expect(calculation.changePercent.toNumber()).toBeCloseTo(10, 4);
+    expect(calculation.changePercent.toNumber()).toBeCloseTo(5, 4);
   });
 
   it('округление до шага не выводит цену за maxChangePercent', () => {
@@ -74,10 +82,10 @@ describe('calculateNextPrice', () => {
   });
 
   it('снижает цену при отрицательном спросе', () => {
-    // 3000 * (1 - 0.2 * 0.5) = 2700
+    // 3000 * (1 - 0.1 * 0.5) = 2850
     const calculation = request({ demandScore: -0.5, maxChangePercent: 20 });
-    expect(calculation.calculatedPrice.toString()).toBe('2700');
-    expect(calculation.changePercent.toNumber()).toBeCloseTo(-10, 4);
+    expect(calculation.calculatedPrice.toString()).toBe('2850');
+    expect(calculation.changePercent.toNumber()).toBeCloseTo(-5, 4);
   });
 
   it('возвращает безопасную ошибку валидации при нулевой цене и базе', () => {
@@ -104,7 +112,7 @@ describe('calculateNextPrice', () => {
 
   it('фиксирует версию алгоритма и валюту в расчёте', () => {
     const calculation = request();
-    expect(calculation.input.algorithmVersion).toBe('v0.1-linear-demand');
+    expect(calculation.input.algorithmVersion).toBe('v0.2-round-demand');
     expect(calculation.result.currency).toBe('KZT');
   });
 });
