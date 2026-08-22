@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import { SalesService } from '../src/modules/sales/sales.service.js';
 
@@ -31,7 +31,7 @@ function makePrisma(roundValue = round) {
     $transaction: vi.fn(async (callback: (value: typeof tx) => unknown) => callback(tx)),
     tx,
     upsert,
-  } as never;
+  } as unknown as PrismaClient;
 }
 
 describe('SalesService', () => {
