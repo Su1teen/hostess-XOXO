@@ -89,6 +89,7 @@ export async function diagnosticsRoutes(app: FastifyInstance): Promise<void> {
           nextRound: nextRound.roundKey,
           scheduler: { intervalMinutes: interval, timezone, running: !(await app.services.exchange.isPaused()) },
           paused: await app.services.exchange.isPaused(),
+          initialization: { expectedProducts: 27, complete: (await app.prisma.exchangeProduct.count()) === 27 },
         },
         rounds: {
           currentWindow: serializeWindow(getCurrentRound(new Date(), timezone, interval)),

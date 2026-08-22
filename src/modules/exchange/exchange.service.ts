@@ -118,7 +118,15 @@ export class ExchangeService {
       this.prisma.priceRound.findFirst({ where: { status: { in: ['SIMULATED', 'PUBLISHED'] }, prices: { some: { exchangeProductId: { not: null } } } }, orderBy: { startsAt: 'asc' } }),
       this.isPaused(),
     ]);
-    return { total, active, currentRound, nextRound, paused, scheduler: { intervalMinutes: 15, timezone: EXCHANGE_TIMEZONE, running: !paused } };
+    return {
+      total,
+      active,
+      initialization: { expectedProducts: EXCHANGE_PRODUCTS.length, complete: total === EXCHANGE_PRODUCTS.length },
+      currentRound,
+      nextRound,
+      paused,
+      scheduler: { intervalMinutes: EXCHANGE_INTERVAL_MINUTES, timezone: EXCHANGE_TIMEZONE, running: !paused },
+    };
   }
 }
 
