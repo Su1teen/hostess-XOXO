@@ -200,6 +200,23 @@ export class ExchangeService {
     }
   }
 
+  /**
+   * Возвращает текущий опубликованный раунд без инициализации или перехода.
+   * Продажа не должна создавать раунд или пересчитывать цены.
+   */
+  async getActiveRound(now: Date = new Date()) {
+    return this.prisma.priceRound.findFirst({
+      where: {
+        status: 'PUBLISHED',
+        startsAt: { lte: now },
+        endsAt: { gt: now },
+        prices: { some: { exchangeProductId: { not: null } } },
+      },
+      orderBy: { startsAt: 'desc' },
+      include: ROUND_INCLUDE,
+    });
+  }
+
   /** Публикует рассчитанные цены раунда и делает их каноническими. */
   private async publishRoundPrices(roundId: string) {
     return this.prisma.$transaction(async (tx) => {

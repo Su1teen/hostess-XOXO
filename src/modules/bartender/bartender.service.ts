@@ -214,7 +214,7 @@ export class BartenderService {
     if (!Number.isSafeInteger(quantity) || quantity <= 0) {
       throw validationError('quantity должен быть положительным целым числом');
     }
-    const round = await this.exchange.ensureCurrentRound();
+    const round = await this.exchange.getActiveRound();
     if (!round) throw notFound('Активный раунд не найден', 'ROUND_NOT_FOUND');
 
     const result = await this.prisma.$transaction(async (tx) => {
@@ -278,7 +278,7 @@ export class BartenderService {
       salesQuantity: result.sale.quantity,
       quantity: result.sale.quantity,
       priceAtSale: toNumber(result.sale.priceAtSale.toString()),
-      discountPercentAtSale: toNumber((result.sale.selectedDiscountPercentAtSale ?? result.sale.actualDiscountPercentAtSale ?? 0).toString()),
+      discountPercentAtSale: toNumber((result.sale.actualDiscountPercentAtSale ?? result.sale.selectedDiscountPercentAtSale ?? 0).toString()),
       roundEndsAt: round.endsAt.toISOString(),
     };
   }

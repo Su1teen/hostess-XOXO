@@ -296,7 +296,7 @@ describe('bartender API', () => {
       method: 'POST',
       url: url + 'decrement',
       headers: { 'x-bartender-token': token },
-      payload: {},
+      payload: { quantity: 1 },
     });
     expect(decrement.statusCode).toBe(200);
     expect(bartender.decrementSales).toHaveBeenCalledWith(
@@ -330,16 +330,49 @@ describe('bartender API', () => {
     await app.close();
   });
 
-  it('sale increment не требует discountPercent в теле', async () => {
+  it('sale increment не принимает discountPercent и требует только quantity', async () => {
     const { app } = await buildHarness();
     const token = await loginToken(app);
-    const response = await app.inject({
+    const url = '/api/v1/bartender/exchange/products/00000000-0000-4000-8000-000000000000/sales/increment';
+
+    const missingQuantity = await app.inject({
       method: 'POST',
-      url: '/api/v1/bartender/exchange/products/00000000-0000-4000-8000-000000000000/sales/increment',
+      url,
       headers: { 'x-bartender-token': token },
       payload: {},
     });
-    expect(response.statusCode).toBe(200);
+    expect(missingQuantity.statusCode).toBe(400);
+
+    const valid = await app.inject({
+      method: 'POST',
+      url,
+      headers: { 'x-bartender-token': token },
+      payload: { quantity: 1 },
+    });
+    expect(valid.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it('sale decrement требует quantity и не принимает discountPercent', async () => {
+    const { app } = await buildHarness();
+    const token = await loginToken(app);
+    const url = '/api/v1/bartender/exchange/products/00000000-0000-4000-8000-000000000000/sales/decrement';
+
+    const missingQuantity = await app.inject({
+      method: 'POST',
+      url,
+      headers: { 'x-bartender-token': token },
+      payload: {},
+    });
+    expect(missingQuantity.statusCode).toBe(400);
+
+    const valid = await app.inject({
+      method: 'POST',
+      url,
+      headers: { 'x-bartender-token': token },
+      payload: { quantity: 1 },
+    });
+    expect(valid.statusCode).toBe(200);
     await app.close();
   });
 });

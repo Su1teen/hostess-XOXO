@@ -19,10 +19,11 @@ const discountBody = {
   },
 } as const;
 
-const quantityBody = {
+const saleQuantityBody = {
   type: 'object',
+  required: ['quantity'],
   additionalProperties: false,
-  properties: { quantity: { type: 'integer', minimum: 1, default: 1 } },
+  properties: { quantity: { type: 'integer', minimum: 1 } },
 } as const;
 
 function tokenOf(request: FastifyRequest): string | undefined {
@@ -132,7 +133,7 @@ export async function bartenderRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  app.post<{ Params: { id: string }; Body: { quantity?: number } }>(
+  app.post<{ Params: { id: string }; Body: { quantity: number } }>(
     `${API_PREFIX}/bartender/exchange/products/:id/sales/increment`,
     {
       preHandler: requireSession,
@@ -140,17 +141,17 @@ export async function bartenderRoutes(app: FastifyInstance): Promise<void> {
         tags: ['Bartender'],
         summary: 'Добавить продажи в текущий раунд',
         params: productParams,
-        body: quantityBody,
+        body: saleQuantityBody,
       },
     },
     async (request) =>
-      app.services.bartender.incrementSales(request.params.id, request.body?.quantity ?? 1, {
+      app.services.bartender.incrementSales(request.params.id, request.body.quantity, {
         requestId: request.id,
         ipAddress: request.ip ?? null,
       }),
   );
 
-  app.post<{ Params: { id: string }; Body: { quantity?: number } }>(
+  app.post<{ Params: { id: string }; Body: { quantity: number } }>(
     `${API_PREFIX}/bartender/exchange/products/:id/sales/decrement`,
     {
       preHandler: requireSession,
@@ -158,11 +159,11 @@ export async function bartenderRoutes(app: FastifyInstance): Promise<void> {
         tags: ['Bartender'],
         summary: 'Убрать продажи из текущего раунда',
         params: productParams,
-        body: quantityBody,
+        body: saleQuantityBody,
       },
     },
     async (request) =>
-      app.services.bartender.decrementSales(request.params.id, request.body?.quantity ?? 1, {
+      app.services.bartender.decrementSales(request.params.id, request.body.quantity, {
         requestId: request.id,
         ipAddress: request.ip ?? null,
       }),
