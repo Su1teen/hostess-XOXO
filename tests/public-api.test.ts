@@ -34,10 +34,11 @@ describe('public exchange API', () => {
 
     const response = await app.inject({ method: 'GET', url: '/api/v1/public/products' });
     expect(response.statusCode).toBe(200);
-    expect(response.json().products).toEqual([
-      expect.objectContaining({ id: 'exchange', name: 'Gin Tonic' }),
-    ]);
-    expect(response.json().products).toHaveLength(1);
+    const products = response.json().products;
+    expect(products).toHaveLength(1);
+    expect(products[0]).toEqual(expect.objectContaining({ id: 'exchange', name: 'Gin Tonic' }));
+    expect(products[0].discountPercent).toBe(31.5625);
+    expect(products[0].currentDiscountPercent).toBeUndefined();
     await app.close();
   });
 });

@@ -140,8 +140,8 @@ async function buildHarness(): Promise<Harness> {
     status: vi.fn(async () => ({ running: true })),
     preview: vi.fn(async () => ({ finalPrice: 1700 })),
     applyPrice: vi.fn(async () => ({ changed: true, product: { id: 'p1' } })),
-    incrementSales: vi.fn(async () => ({ salesQuantity: 3 })),
-    decrementSales: vi.fn(async () => ({ salesQuantity: 1 })),
+    incrementSales: vi.fn(async () => ({ salesQuantity: 3, quantity: 3, priceAtSale: 990, discountPercentAtSale: 31.7, roundEndsAt: '2026-08-22T22:15:00.000Z' })),
+    decrementSales: vi.fn(async () => ({ salesQuantity: 1, quantity: 1, priceAtSale: 990, discountPercentAtSale: 31.7, roundEndsAt: '2026-08-22T22:15:00.000Z' })),
   };
   app.decorate('services', {
     bartender,
@@ -306,13 +306,49 @@ describe('bartender API', () => {
     );
     await app.close();
   });
+
+  it('sale increment с {quantity:1} без discountPercent — основное действие бармена', async () => {
+    const { app, bartender } = await buildHarness();
+    const token = await loginToken(app);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/bartender/exchange/products/00000000-0000-4000-8000-000000000000/sales/increment',
+      headers: { 'x-bartender-token': token },
+      payload: { quantity: 1 },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(bartender.incrementSales).toHaveBeenCalledWith(
+      '00000000-0000-4000-8000-000000000000',
+      1,
+      expect.anything(),
+    );
+    const body = response.json();
+    expect(body.priceAtSale).toBe(990);
+    expect(body.discountPercentAtSale).toBe(31.7);
+    expect(body.roundEndsAt).toBeTypeOf('string');
+    expect(body.discountPercent).toBeUndefined();
+    await app.close();
+  });
+
+  it('sale increment не требует discountPercent в теле', async () => {
+    const { app } = await buildHarness();
+    const token = await loginToken(app);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/bartender/exchange/products/00000000-0000-4000-8000-000000000000/sales/increment',
+      headers: { 'x-bartender-token': token },
+      payload: {},
+    });
+    expect(response.statusCode).toBe(200);
+    await app.close();
+  });
 });
 
 describe('страница /admin', () => {
   it('содержит вход в режим бармена и не содержит PIN', () => {
     expect(ADMIN_PAGE_HTML).toContain('id="btnBartenderOpen"');
     expect(ADMIN_PAGE_HTML).toContain('id="bartenderWorkspace"');
-    expect(ADMIN_PAGE_HTML).toContain('Расчёт цен');
+    expect(ADMIN_PAGE_HTML).toContain('Бармен — продажи');
     expect(ADMIN_PAGE_HTML).toContain('/api/v1/bartender');
     expect(ADMIN_PAGE_HTML).not.toContain('1234');
   });
@@ -326,5 +362,11 @@ describe('страница /admin', () => {
     expect(ADMIN_PAGE_HTML).toContain('Рассчитать');
     expect(ADMIN_PAGE_HTML).toContain('Применить');
     expect(ADMIN_PAGE_HTML).toContain('bt-disc');
+  });
+
+  it('основное действие — Продано +1, не требует скидку', () => {
+    expect(ADMIN_PAGE_HTML).toContain('Продано +1');
+    expect(ADMIN_PAGE_HTML).toContain('sales/increment');
+    expect(ADMIN_PAGE_HTML).not.toContain('selectedDiscountPercent');
   });
 });

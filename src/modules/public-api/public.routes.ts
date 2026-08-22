@@ -15,6 +15,7 @@ const publicProductSchema = {
     'currency',
     'previousPrice',
     'changePercent',
+    'discountPercent',
     'isAvailable',
   ],
   additionalProperties: false,
@@ -25,7 +26,7 @@ const publicProductSchema = {
     price: { type: 'number' },
     currency: { type: 'string' },
     originalPrice: { type: 'number' },
-    currentDiscountPercent: { type: 'number' },
+    discountPercent: { type: 'number' },
     previousPrice: { type: ['number', 'null'] },
     changePercent: { type: 'number' },
     isAvailable: { type: 'boolean' },
@@ -168,7 +169,7 @@ function mapCatalogProduct(product: ExchangeProduct) {
     price: toNumber(product.currentPrice.toString()),
     currency: product.currency,
     originalPrice: toNumber(product.originalPrice.toString()),
-    currentDiscountPercent: Number(product.currentDiscountPercent.toString()),
+    discountPercent: Number(product.currentDiscountPercent.toString()),
     isAvailable: product.isActive,
   };
 }
