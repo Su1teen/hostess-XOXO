@@ -42,6 +42,14 @@ export const envSchema = z
     ADMIN_API_KEY: z.string().min(16, 'ADMIN_API_KEY обязателен, минимум 16 символов'),
     ADMIN_API_KEY_HEADER: z.string().default('x-admin-api-key'),
 
+    // Панель бармена: предпочтительно BARTENDER_PIN_HASH (sha256 hex от PIN).
+    // BARTENDER_PIN — временный fallback в открытом виде (по умолчанию 1234).
+    BARTENDER_PIN_HASH: optionalString,
+    BARTENDER_PIN: z.string().default('1234'),
+    BARTENDER_SESSION_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(720),
+    BARTENDER_LOGIN_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(100).default(10),
+    BARTENDER_LOGIN_WINDOW_SECONDS: z.coerce.number().int().min(10).max(3600).default(300),
+
     CORS_ORIGINS: csvList,
 
     // Auth и полное menu используют РАЗНЫЕ базы iiko Cloud API:

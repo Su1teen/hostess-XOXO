@@ -11,7 +11,11 @@ import {
 import { toMoney } from '../../lib/money.js';
 import { getCurrentRound, getNextRound, getRoundForInstant, getRoundKey } from '../../lib/time.js';
 import type { AuditService } from '../../services/audit.service.js';
-import { calculateDemandScore, calculateNextPrice } from '../../services/price-engine.service.js';
+import { calculateDiscountPercent } from '../../services/discount.service.js';
+import {
+  calculateExchangeDemandScore,
+  calculateNextPrice,
+} from '../../services/price-engine.service.js';
 
 export interface DemandOverride {
   productId: string;
@@ -124,7 +128,7 @@ export class RoundsService {
     const priceRows = products.map((product) => {
       const override = overrides.get(product.id);
       const salesQuantity = override?.salesQuantity ?? salesByProduct.get(product.id) ?? 0;
-      const demandScore = calculateDemandScore(salesQuantity, averageSales);
+      const demandScore = calculateExchangeDemandScore(salesQuantity, averageSales);
       const calculation = calculateNextPrice({
         productId: product.id,
         productName: product.name,
@@ -141,6 +145,12 @@ export class RoundsService {
 
       return {
         exchangeProductId: product.id,
+        originalPrice: product.originalPrice.toString(),
+        selectedDiscountPercent: null,
+        actualDiscountPercent: calculateDiscountPercent(
+          product.originalPrice.toString(),
+          calculation.calculatedPrice,
+        ).toString(),
         price: calculation.calculatedPrice.toString(),
         soldQuantity: calculation.salesQuantity.toString(),
         previousPrice: calculation.previousPrice.toString(),
@@ -274,7 +284,10 @@ export class RoundsService {
         } else if (price.productId) {
           await tx.product.update({
             where: { id: price.productId },
-            data: { currentExchangePrice: price.calculatedPrice, currentPrice: price.calculatedPrice },
+            data: {
+              currentExchangePrice: price.calculatedPrice,
+              currentPrice: price.calculatedPrice,
+            },
           });
         }
       }
@@ -407,7 +420,9 @@ export class RoundsService {
       items: round.prices.map((price) => ({
         productName: price.exchangeProduct?.name ?? price.product?.name ?? 'Unknown',
         iikoProductId: price.product?.iikoProductId ?? null,
-        currentPrice: toMoney((price.previousPrice ?? price.exchangeProduct?.currentPrice ?? 0).toString()).toNumber(),
+        currentPrice: toMoney(
+          (price.previousPrice ?? price.exchangeProduct?.currentPrice ?? 0).toString(),
+        ).toNumber(),
         nextPrice: toMoney((price.publishedPrice ?? price.calculatedPrice).toString()).toNumber(),
         startTime: round.startsAt.toISOString(),
         roundId: round.id,

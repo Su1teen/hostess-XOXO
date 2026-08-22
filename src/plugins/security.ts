@@ -36,6 +36,7 @@ export const securityPlugin = fp(async (app: FastifyInstance) => {
       'content-type',
       app.env.ADMIN_API_KEY_HEADER,
       'x-plugin-secret',
+      'x-bartender-token',
       'x-request-id',
     ],
     maxAge: 600,
@@ -60,13 +61,24 @@ export const securityPlugin = fp(async (app: FastifyInstance) => {
   // Строгий лимит для чувствительных префиксов.
   app.addHook('onRoute', (routeOptions) => {
     const url = routeOptions.url;
+    const config = (routeOptions.config ?? {}) as Record<string, unknown>;
+
+    // Вход по PIN: отдельный жёсткий лимит против перебора.
+    if (url === `${API_PREFIX}/bartender/auth`) {
+      if (!config.rateLimit) {
+        routeOptions.config = {
+          ...config,
+          rateLimit: { max: 10, timeWindow: '1 minute' },
+        };
+      }
+      return;
+    }
+
     const strict =
       url.startsWith(`${API_PREFIX}/admin`) ||
       url.startsWith(`${API_PREFIX}/webhooks`) ||
       url.startsWith(`${API_PREFIX}/front-plugin`);
     if (!strict) return;
-
-    const config = (routeOptions.config ?? {}) as Record<string, unknown>;
     if (config.rateLimit) return;
     routeOptions.config = {
       ...config,

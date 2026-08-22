@@ -39,6 +39,7 @@ export const SWAGGER_TAGS = [
   { name: 'Admin Diagnostics', description: 'Диагностика и статус (требует x-admin-api-key)' },
   { name: 'iiko', description: 'Интеграция с iiko Cloud API (только чтение в v0.1)' },
   { name: 'Products', description: 'Номенклатура и выбор биржевых товаров' },
+  { name: 'Bartender', description: 'Панель бармена: ручные скидки и продажи (вход по PIN)' },
   { name: 'Rounds', description: '15-минутные ценовые раунды' },
   { name: 'Telegram', description: 'Алерты в Telegram' },
   { name: 'Webhooks', description: 'Приём событий iiko (experimental)' },

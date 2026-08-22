@@ -99,6 +99,120 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         color: var(--muted);
       }
       #message { min-height: 20px; margin: 10px 0; font-size: 13px; }
+
+      /* ---------- Режим «Бармен» ---------- */
+      .bartender-entry {
+        display: block;
+        width: 100%;
+        margin: 0 0 16px;
+        padding: 14px 18px;
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        background: #1f6feb;
+      }
+      body.bartender-active .wrap { display: none; }
+      body.bartender-active { padding: 0; overflow: hidden; }
+      #bartenderMode {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        display: flex;
+        flex-direction: column;
+        background: #0b0e13;
+        overflow: hidden;
+      }
+      #bartenderMode[hidden] { display: none; }
+      .bt-login {
+        margin: auto;
+        width: min(360px, calc(100% - 32px));
+        padding: 24px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+      }
+      .bt-login h2 { font-size: 18px; }
+      .bt-login input { font-size: 22px; letter-spacing: 0.35em; text-align: center; padding: 12px; }
+      .bt-login button { width: 100%; padding: 12px; font-size: 15px; }
+      #bartenderWorkspace { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+      #bartenderWorkspace[hidden] { display: none; }
+      .bt-top {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border);
+        background: #10141b;
+      }
+      .bt-top h2 { margin: 0; font-size: 17px; }
+      .bt-meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--muted); }
+      .bt-top .bt-actions { margin-left: auto; display: flex; flex-wrap: wrap; }
+      .bt-top button { margin: 0 0 0 6px; }
+      .bt-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border);
+      }
+      .bt-controls input[type='search'] {
+        flex: 1 1 240px;
+        margin: 0;
+        padding: 10px 12px;
+        font-size: 15px;
+      }
+      .bt-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+      .bt-filters button { margin: 0; background: #21262d; border: 1px solid var(--border); }
+      .bt-filters button[aria-pressed='true'] { background: #1f6feb; border-color: #1f6feb; }
+      .bt-grid {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        padding: 12px 14px 24px;
+        align-content: start;
+      }
+      .bt-card {
+        background: #141922;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 12px;
+      }
+      .bt-card h3 { margin: 0; font-size: 16px; }
+      .bt-card .bt-cat { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+      .bt-prices { display: flex; flex-wrap: wrap; gap: 10px 16px; margin-bottom: 8px; }
+      .bt-prices div { font-size: 12px; color: var(--muted); }
+      .bt-prices b { display: block; font-size: 15px; color: var(--text); font-weight: 600; }
+      .bt-prices .bt-now b { font-size: 22px; color: #58a6ff; }
+      .bt-disc { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-bottom: 8px; }
+      .bt-disc button {
+        margin: 0;
+        padding: 9px 0;
+        font-size: 13px;
+        background: #1b212c;
+        border: 1px solid var(--border);
+      }
+      .bt-disc button[aria-pressed='true'] { background: #1f6feb; border-color: #1f6feb; }
+      .bt-apply { display: flex; gap: 6px; margin-bottom: 6px; }
+      .bt-apply button { margin: 0; flex: 1; padding: 10px 8px; font-size: 14px; }
+      .bt-apply button.bt-do-apply { background: #238636; }
+      .bt-preview { font-size: 13px; min-height: 20px; margin-bottom: 8px; }
+      .bt-sales { display: flex; gap: 6px; align-items: center; }
+      .bt-sales button { margin: 0; padding: 10px 12px; font-size: 15px; background: #21262d; border: 1px solid var(--border); }
+      .bt-sales input { width: 64px; margin: 0; padding: 9px 6px; text-align: center; font-size: 15px; }
+      .bt-sales .bt-count { margin-left: auto; font-size: 13px; color: var(--muted); }
+      .bt-sales .bt-count b { color: var(--text); font-size: 16px; }
+      .bt-state { margin-top: 6px; font-size: 12px; color: var(--muted); }
+      .bt-state.err { color: var(--err); }
+      .bt-state.ok { color: var(--ok); }
+      @media (max-width: 520px) {
+        .bt-disc { grid-template-columns: repeat(4, 1fr); }
+        .bt-top .bt-actions { margin-left: 0; }
+      }
     </style>
   </head>
   <body>
@@ -107,6 +221,10 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
       <p class="sub">
         v0.1: backend не изменяет цены в iiko, не создаёт заказы и не отправляет команды на кассу.
       </p>
+
+      <button id="btnBartenderOpen" class="bartender-entry" type="button">
+        Бармен — рабочая панель расчёта цен
+      </button>
 
       <div class="card">
         <h2>Доступ</h2>
@@ -236,6 +354,40 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
       <div class="note">
         Публикация раунда обновляет только цены backend и публичного API для сайта.
         Касса iikoFront получит цены только после реализации плагина (v0.3+).
+      </div>
+    </div>
+
+    <div id="bartenderMode" hidden>
+      <div id="bartenderLogin" class="bt-login">
+        <h2>Панель бармена</h2>
+        <p class="muted">Введите PIN смены.</p>
+        <label for="bartenderPin">PIN</label>
+        <input id="bartenderPin" type="password" inputmode="numeric" autocomplete="off" />
+        <button id="btnBartenderLogin" type="button">Войти</button>
+        <button id="btnBartenderCancel" class="secondary" type="button">Вернуться в админку</button>
+        <div id="bartenderLoginMsg" class="muted"></div>
+      </div>
+
+      <div id="bartenderWorkspace" hidden>
+        <div class="bt-top">
+          <h2>Расчёт цен</h2>
+          <div class="bt-meta">
+            <span id="btConn" class="status warn">подключение…</span>
+            <span id="btRound">раунд: —</span>
+            <span id="btUpdated">обновлено: —</span>
+          </div>
+          <div class="bt-actions">
+            <button id="btnBtRefresh" class="secondary" type="button">Обновить</button>
+            <button id="btnBtFullscreen" class="secondary" type="button">На весь экран</button>
+            <button id="btnBtAdmin" class="secondary" type="button">В админку</button>
+            <button id="btnBtLogout" class="secondary" type="button">Выйти</button>
+          </div>
+        </div>
+        <div class="bt-controls">
+          <input id="btSearch" type="search" placeholder="Поиск: название или категория" autocomplete="off" />
+          <div id="btFilters" class="bt-filters"></div>
+        </div>
+        <div id="btGrid" class="bt-grid"></div>
       </div>
     </div>
 
@@ -712,6 +864,417 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
             return Promise.all([loadCategories(), loadProducts(), loadParserSample()]);
           }));
         }
+      })();
+    </script>
+
+    <!-- Режим «Бармен»: независимая сессия по PIN, админ-ключ здесь не используется. -->
+    <script>
+      (function () {
+        'use strict';
+        var BASE = '/api/v1/bartender';
+        var TOKEN_KEY = 'barExchangeBartenderToken';
+        var EXPIRES_KEY = 'barExchangeBartenderExpires';
+        var BASE_FILTERS = ['Все', 'Крепкий алкоголь', 'Бутылочное пиво', 'Коктейли'];
+        var DISCOUNTS = [];
+        for (var d = 0; d < 100; d += 5) { DISCOUNTS.push(d); }
+
+        var el = function (id) { return document.getElementById(id); };
+        var mode = el('bartenderMode');
+        var loginBox = el('bartenderLogin');
+        var workspace = el('bartenderWorkspace');
+        var loginMsg = el('bartenderLoginMsg');
+        var grid = el('btGrid');
+        var money = new Intl.NumberFormat('ru-RU');
+        var state = { products: [], filter: 'Все', query: '', cards: {}, timer: null };
+
+        function token() { return sessionStorage.getItem(TOKEN_KEY) || ''; }
+
+        function setSession(value, expiresAt) {
+          if (value) {
+            sessionStorage.setItem(TOKEN_KEY, value);
+            sessionStorage.setItem(EXPIRES_KEY, expiresAt || '');
+          } else {
+            sessionStorage.removeItem(TOKEN_KEY);
+            sessionStorage.removeItem(EXPIRES_KEY);
+          }
+        }
+
+        function api(method, path, body) {
+          var headers = { 'x-bartender-token': token() };
+          if (body) { headers['content-type'] = 'application/json'; }
+          return fetch(BASE + path, {
+            method: method,
+            headers: headers,
+            body: body ? JSON.stringify(body) : undefined,
+          }).then(function (response) {
+            return response.json().catch(function () { return {}; }).then(function (json) {
+              if (response.status === 401 || response.status === 403) {
+                setSession('');
+                showLogin('Сессия истекла, войдите снова.');
+                throw new Error('UNAUTHORIZED');
+              }
+              if (!response.ok) {
+                var text = json && json.error ? json.error.message : 'Ошибка запроса';
+                setConnection(false);
+                throw new Error(text);
+              }
+              setConnection(true);
+              return json;
+            });
+          });
+        }
+
+        function setConnection(ok) {
+          var node = el('btConn');
+          node.className = 'status ' + (ok ? 'ok' : 'err');
+          node.textContent = ok ? 'связь есть' : 'нет связи';
+        }
+
+        function openMode() {
+          document.body.classList.add('bartender-active');
+          mode.hidden = false;
+          if (token()) { showWorkspace(); } else { showLogin(''); }
+        }
+
+        function closeMode() {
+          stopPolling();
+          document.body.classList.remove('bartender-active');
+          mode.hidden = true;
+        }
+
+        function showLogin(text) {
+          stopPolling();
+          workspace.hidden = true;
+          loginBox.hidden = false;
+          loginMsg.textContent = text || '';
+          loginMsg.className = text ? 'status err' : 'muted';
+          el('bartenderPin').value = '';
+          el('bartenderPin').focus();
+        }
+
+        function showWorkspace() {
+          loginBox.hidden = true;
+          workspace.hidden = false;
+          renderFilters();
+          refresh();
+          startPolling();
+        }
+
+        function startPolling() {
+          stopPolling();
+          state.timer = window.setInterval(refresh, 20000);
+        }
+
+        function stopPolling() {
+          if (state.timer) { window.clearInterval(state.timer); state.timer = null; }
+        }
+
+        function login() {
+          var pin = el('bartenderPin').value.trim();
+          if (!pin) { showLogin('Введите PIN.'); return; }
+          fetch(BASE + '/auth', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ pin: pin }),
+          }).then(function (response) {
+            return response.json().catch(function () { return {}; }).then(function (json) {
+              el('bartenderPin').value = '';
+              if (!response.ok) {
+                showLogin(json && json.error ? json.error.message : 'Не удалось войти.');
+                return;
+              }
+              setSession(json.token, json.expiresAt);
+              showWorkspace();
+            });
+          }).catch(function () { showLogin('Сеть недоступна.'); });
+        }
+
+        function logout() {
+          var current = token();
+          setSession('');
+          showLogin('Вы вышли из панели.');
+          if (!current) { return; }
+          fetch(BASE + '/logout', { method: 'POST', headers: { 'x-bartender-token': current } })
+            .catch(function () {});
+        }
+
+        function refresh() {
+          return Promise.all([
+            api('GET', '/exchange/products'),
+            api('GET', '/exchange/status'),
+          ]).then(function (results) {
+            state.products = results[0].products || [];
+            renderStatus(results[1]);
+            renderFilters();
+            renderGrid();
+          }).catch(function () {});
+        }
+
+        function renderStatus(status) {
+          var round = status.currentRound;
+          el('btRound').textContent = 'раунд: ' + (round ? round.roundKey : '—') +
+            (status.secondsRemaining === null || status.secondsRemaining === undefined
+              ? ''
+              : ' (' + Math.ceil(status.secondsRemaining / 60) + ' мин)');
+          el('btUpdated').textContent = 'обновлено: ' + time(status.generatedAt) +
+            ' · позиций: ' + status.activeProducts +
+            ' · продаж в раунде: ' + status.currentRoundSales +
+            ' · расчёт: ' + (status.running ? 'идёт' : 'пауза');
+        }
+
+        function categories() {
+          var list = BASE_FILTERS.slice();
+          state.products.forEach(function (product) {
+            if (list.indexOf(product.category) === -1) { list.push(product.category); }
+          });
+          return list;
+        }
+
+        function renderFilters() {
+          var box = el('btFilters');
+          box.textContent = '';
+          categories().forEach(function (name) {
+            var button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = name;
+            button.setAttribute('aria-pressed', String(name === state.filter));
+            button.addEventListener('click', function () {
+              state.filter = name;
+              renderFilters();
+              renderGrid();
+            });
+            box.appendChild(button);
+          });
+        }
+
+        function visibleProducts() {
+          var query = state.query.trim().toLowerCase();
+          return state.products.filter(function (product) {
+            if (state.filter !== 'Все' && product.category !== state.filter) { return false; }
+            if (!query) { return true; }
+            return (product.name + ' ' + product.category).toLowerCase().indexOf(query) !== -1;
+          });
+        }
+
+        function cardState(id) {
+          if (!state.cards[id]) {
+            state.cards[id] = { selected: null, preview: null, qty: 1, note: '', kind: '' };
+          }
+          return state.cards[id];
+        }
+
+        function price(value) { return money.format(value) + ' ₸'; }
+
+        function time(value) {
+          if (!value) { return '—'; }
+          var date = new Date(value);
+          return isNaN(date.getTime()) ? '—' : date.toLocaleTimeString('ru-RU', { hour12: false });
+        }
+
+        function renderGrid() {
+          var products = visibleProducts();
+          grid.textContent = '';
+          if (products.length === 0) {
+            var empty = document.createElement('p');
+            empty.className = 'muted';
+            empty.textContent = 'Ничего не найдено.';
+            grid.appendChild(empty);
+            return;
+          }
+          products.forEach(function (product) { grid.appendChild(renderCard(product)); });
+        }
+
+        function renderCard(product) {
+          var card = cardState(product.id);
+          var node = document.createElement('div');
+          node.className = 'bt-card';
+
+          var title = document.createElement('h3');
+          title.textContent = product.name;
+          node.appendChild(title);
+
+          var meta = document.createElement('div');
+          meta.className = 'bt-cat';
+          meta.textContent = product.category + (product.volumeMl ? ' · ' + product.volumeMl + ' мл' : '');
+          node.appendChild(meta);
+
+          var prices = document.createElement('div');
+          prices.className = 'bt-prices';
+          prices.appendChild(priceCell('Меню', price(product.originalPrice), ''));
+          prices.appendChild(priceCell('Минимум', price(product.minPrice), ''));
+          prices.appendChild(priceCell('Сейчас', price(product.currentPrice), 'bt-now'));
+          prices.appendChild(priceCell('Скидка', product.currentDiscountPercent.toFixed(1) + '%', ''));
+          node.appendChild(prices);
+
+          var discounts = document.createElement('div');
+          discounts.className = 'bt-disc';
+          DISCOUNTS.forEach(function (percent) {
+            var button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = percent + '%';
+            button.setAttribute('aria-pressed', String(card.selected === percent));
+            button.addEventListener('click', function () {
+              card.selected = percent;
+              card.preview = null;
+              card.note = '';
+              card.kind = '';
+              renderGrid();
+            });
+            discounts.appendChild(button);
+          });
+          node.appendChild(discounts);
+
+          var preview = document.createElement('div');
+          preview.className = 'bt-preview muted';
+          if (card.preview) {
+            preview.textContent = 'Итог: ' + price(card.preview.finalPrice) +
+              ' · факт. скидка ' + card.preview.actualDiscountPercent.toFixed(1) + '%' +
+              (card.preview.minPriceApplied ? ' · Цена ограничена минимальной ценой' : '');
+            preview.className = 'bt-preview ' + (card.preview.minPriceApplied ? 'status warn' : 'status ok');
+          } else {
+            preview.textContent = card.selected === null
+              ? 'Выберите скидку и нажмите «Рассчитать».'
+              : 'Скидка ' + card.selected + '% выбрана — нажмите «Рассчитать».';
+          }
+          node.appendChild(preview);
+
+          var actions = document.createElement('div');
+          actions.className = 'bt-apply';
+          var calcButton = document.createElement('button');
+          calcButton.type = 'button';
+          calcButton.className = 'secondary';
+          calcButton.textContent = 'Рассчитать';
+          calcButton.disabled = card.selected === null;
+          calcButton.addEventListener('click', function () {
+            api('POST', '/exchange/products/' + product.id + '/price-preview', {
+              selectedDiscountPercent: card.selected,
+            }).then(function (result) {
+              card.preview = result;
+              card.note = '';
+              card.kind = '';
+              renderGrid();
+            }).catch(function (error) { note(card, error.message, 'err'); });
+          });
+          var applyButton = document.createElement('button');
+          applyButton.type = 'button';
+          applyButton.className = 'bt-do-apply';
+          applyButton.textContent = 'Применить';
+          applyButton.disabled = !card.preview;
+          applyButton.addEventListener('click', function () {
+            api('POST', '/exchange/products/' + product.id + '/apply-price', {
+              selectedDiscountPercent: card.selected,
+            }).then(function (result) {
+              replaceProduct(result.product);
+              card.preview = null;
+              card.selected = null;
+              note(card, 'Применено ' + time(result.appliedAt) + ' · ' + price(result.product.currentPrice), 'ok');
+            }).catch(function (error) { note(card, error.message, 'err'); });
+          });
+          actions.appendChild(calcButton);
+          actions.appendChild(applyButton);
+          node.appendChild(actions);
+
+          var sales = document.createElement('div');
+          sales.className = 'bt-sales';
+          var minus = document.createElement('button');
+          minus.type = 'button';
+          minus.textContent = '−';
+          minus.addEventListener('click', function () { changeSales(product, card, 'decrement', card.qty); });
+          var quantity = document.createElement('input');
+          quantity.type = 'number';
+          quantity.min = '1';
+          quantity.step = '1';
+          quantity.value = String(card.qty);
+          quantity.addEventListener('change', function () {
+            var parsed = parseInt(quantity.value, 10);
+            card.qty = parsed > 0 ? parsed : 1;
+            quantity.value = String(card.qty);
+          });
+          var plus = document.createElement('button');
+          plus.type = 'button';
+          plus.textContent = '+';
+          plus.addEventListener('click', function () { changeSales(product, card, 'increment', card.qty); });
+          var quick = document.createElement('button');
+          quick.type = 'button';
+          quick.textContent = '+1';
+          quick.addEventListener('click', function () { changeSales(product, card, 'increment', 1); });
+          var counter = document.createElement('span');
+          counter.className = 'bt-count';
+          counter.innerHTML = '';
+          counter.appendChild(document.createTextNode('продажи: '));
+          var counterValue = document.createElement('b');
+          counterValue.textContent = String(product.salesQuantity);
+          counter.appendChild(counterValue);
+          sales.appendChild(minus);
+          sales.appendChild(quantity);
+          sales.appendChild(plus);
+          sales.appendChild(quick);
+          sales.appendChild(counter);
+          node.appendChild(sales);
+
+          var stateLine = document.createElement('div');
+          stateLine.className = 'bt-state ' + (card.kind || '');
+          stateLine.textContent = card.note || (product.manualPriceAppliedAt
+            ? 'Последнее применение: ' + time(product.manualPriceAppliedAt)
+            : 'Ручная скидка ещё не применялась.');
+          node.appendChild(stateLine);
+
+          return node;
+        }
+
+        function priceCell(label, value, extraClass) {
+          var cell = document.createElement('div');
+          if (extraClass) { cell.className = extraClass; }
+          cell.appendChild(document.createTextNode(label));
+          var strong = document.createElement('b');
+          strong.textContent = value;
+          cell.appendChild(strong);
+          return cell;
+        }
+
+        function note(card, text, kind) {
+          card.note = text;
+          card.kind = kind;
+          renderGrid();
+        }
+
+        function replaceProduct(updated) {
+          state.products = state.products.map(function (product) {
+            return product.id === updated.id ? updated : product;
+          });
+        }
+
+        function changeSales(product, card, action, quantity) {
+          api('POST', '/exchange/products/' + product.id + '/sales/' + action, { quantity: quantity })
+            .then(function (result) {
+              product.salesQuantity = result.salesQuantity;
+              note(card, 'Продажи в раунде: ' + result.salesQuantity, 'ok');
+            })
+            .catch(function (error) { note(card, error.message, 'err'); });
+        }
+
+        el('btnBartenderOpen').addEventListener('click', openMode);
+        el('btnBartenderCancel').addEventListener('click', closeMode);
+        el('btnBtAdmin').addEventListener('click', closeMode);
+        el('btnBartenderLogin').addEventListener('click', login);
+        el('bartenderPin').addEventListener('keydown', function (event) {
+          if (event.key === 'Enter') { login(); }
+        });
+        el('btnBtLogout').addEventListener('click', logout);
+        el('btnBtRefresh').addEventListener('click', function () { refresh(); });
+        el('btnBtFullscreen').addEventListener('click', function () {
+          if (document.fullscreenElement) {
+            document.exitFullscreen();
+          } else if (mode.requestFullscreen) {
+            mode.requestFullscreen();
+          }
+        });
+        el('btSearch').addEventListener('input', function (event) {
+          state.query = event.target.value;
+          renderGrid();
+        });
+
+        if (token()) { openMode(); }
       })();
     </script>
   </body>

@@ -4,6 +4,7 @@ import { AppError, internalError } from './lib/errors.js';
 import { sanitizeMessage } from './lib/redaction.js';
 import { adminPageRoutes } from './modules/admin/admin-page.routes.js';
 import { diagnosticsRoutes } from './modules/admin/diagnostics.routes.js';
+import { bartenderRoutes } from './modules/bartender/bartender.routes.js';
 import { exchangeRoutes } from './modules/exchange/exchange.routes.js';
 import { frontPluginRoutes } from './modules/front-plugin/front-plugin.routes.js';
 import { healthRoutes } from './modules/health/health.routes.js';
@@ -21,7 +22,6 @@ import { securityPlugin } from './plugins/security.js';
 import { swaggerPlugin } from './plugins/swagger.js';
 
 const MAX_BODY_BYTES = 512 * 1024;
-
 
 //hellyeah
 export async function buildApp(env: AppEnv = getEnv()): Promise<FastifyInstance> {
@@ -53,6 +53,7 @@ export async function buildApp(env: AppEnv = getEnv()): Promise<FastifyInstance>
   await app.register(publicRoutes);
   await app.register(diagnosticsRoutes);
   await app.register(exchangeRoutes);
+  await app.register(bartenderRoutes);
   await app.register(iikoRoutes);
   await app.register(productsRoutes);
   await app.register(roundsRoutes);

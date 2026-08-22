@@ -75,6 +75,9 @@ enum AuditAction {
   PLUGIN_QUOTE_REQUESTED
   TELEGRAM_ALERT_SENT
   ADMIN_ACTION
+  BARTENDER_LOGIN
+  BARTENDER_PRICE_APPLIED
+  BARTENDER_SALE_RECORDED
 }
 
 model Organization {
@@ -103,11 +106,17 @@ model ExchangeProduct {
   category     String
   volumeMl     Int?     @map("volume_ml")
   currency     String   @default("KZT")
+  // Цена меню (без скидки) — база для расчёта ручной скидки бармена.
+  originalPrice Decimal @map("original_price") @db.Decimal(12, 2)
+  // Стартовая цена биржи равна minPrice, а не originalPrice.
   startPrice   Decimal  @map("start_price") @db.Decimal(12, 2)
   currentPrice Decimal  @map("current_price") @db.Decimal(12, 2)
   minPrice     Decimal  @map("min_price") @db.Decimal(12, 2)
   maxPrice     Decimal  @map("max_price") @db.Decimal(12, 2)
   priceStep    Decimal  @default(50) @map("price_step") @db.Decimal(12, 2)
+  currentDiscountPercent Decimal  @default(0) @map("current_discount_percent") @db.Decimal(9, 4)
+  actualDiscountPercent  Decimal? @map("actual_discount_percent") @db.Decimal(9, 4)
+  manualPriceAppliedAt   DateTime? @map("manual_price_applied_at")
   isActive     Boolean  @default(true) @map("is_active")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
@@ -232,6 +241,9 @@ model RoundPrice {
   maxPrice          Decimal     @map("max_price") @db.Decimal(12, 2)
   priceStep         Decimal     @map("price_step") @db.Decimal(12, 2)
   salesQuantity     Decimal     @default(0) @map("sales_quantity") @db.Decimal(12, 3)
+  originalPrice     Decimal?    @map("original_price") @db.Decimal(12, 2)
+  selectedDiscountPercent Decimal? @map("selected_discount_percent") @db.Decimal(9, 4)
+  actualDiscountPercent   Decimal? @map("actual_discount_percent") @db.Decimal(9, 4)
   demandScore       Decimal     @default(0) @map("demand_score") @db.Decimal(8, 4)
   changePercent     Decimal     @map("change_percent") @db.Decimal(8, 4)
   calculationInput  Json        @map("calculation_input")
@@ -258,6 +270,8 @@ model ExchangeSale {
   exchangeProductId String?        @map("exchange_product_id") @db.Uuid
   quantity         Int
   priceAtSale Decimal    @map("price_at_sale") @db.Decimal(12, 2)
+  selectedDiscountPercentAtSale Decimal? @map("selected_discount_percent_at_sale") @db.Decimal(9, 4)
+  actualDiscountPercentAtSale   Decimal? @map("actual_discount_percent_at_sale") @db.Decimal(9, 4)
   source      SaleSource @default(MANUAL_PANEL)
   createdAt   DateTime   @default(now()) @map("created_at")
   updatedAt   DateTime   @updatedAt @map("updated_at")
