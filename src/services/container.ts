@@ -1,5 +1,7 @@
 import type { PrismaClient } from '@prisma/client';
 import type { AppEnv } from '../config/env.js';
+import { BartenderService } from '../modules/bartender/bartender.service.js';
+import { BartenderSessionService } from '../modules/bartender/bartender.session.js';
 import { ExchangeService } from '../modules/exchange/exchange.service.js';
 import { IikoSyncService } from '../modules/iiko/iiko.service.js';
 import { ProductsService } from '../modules/products/products.service.js';
@@ -12,6 +14,8 @@ import { TelegramService } from './telegram.service.js';
 
 export interface AppServices {
   audit: AuditService;
+  bartender: BartenderService;
+  bartenderSessions: BartenderSessionService;
   exchange: ExchangeService;
   iikoClient: IikoClient;
   iikoSync: IikoSyncService;
@@ -64,11 +68,31 @@ export function createServices(
   });
 
   const exchange = new ExchangeService(prisma);
+  const bartender = new BartenderService(prisma, exchange, audit);
+  const bartenderSessions = new BartenderSessionService({
+    pinHash: env.BARTENDER_PIN_HASH,
+    pin: env.BARTENDER_PIN,
+    sessionTtlMinutes: env.BARTENDER_SESSION_TTL_MINUTES,
+    maxAttempts: env.BARTENDER_LOGIN_MAX_ATTEMPTS,
+    attemptWindowSeconds: env.BARTENDER_LOGIN_WINDOW_SECONDS,
+  });
   const products = new ProductsService(prisma, audit);
   const rounds = new RoundsService(prisma, env, audit);
   const sales = new SalesService(prisma);
   const iikoSync = new IikoSyncService(prisma, env, iikoClient, audit, telegram);
   const pricePublisher = createPricePublisher(env, rounds);
 
-  return { audit, exchange, iikoClient, iikoSync, telegram, products, rounds, sales, pricePublisher };
+  return {
+    audit,
+    bartender,
+    bartenderSessions,
+    exchange,
+    iikoClient,
+    iikoSync,
+    telegram,
+    products,
+    rounds,
+    sales,
+    pricePublisher,
+  };
 }

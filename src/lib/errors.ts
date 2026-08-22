@@ -175,3 +175,6 @@ export const databaseUnavailable = () =>
   new AppError('DATABASE_UNAVAILABLE', 'База данных недоступна', 503);
 
 export const internalError = () => new AppError('INTERNAL_ERROR', 'Внутренняя ошибка сервиса', 500);
+
+export const rateLimited = (message = 'Слишком много попыток, попробуйте позже') =>
+  new AppError('RATE_LIMITED', message, 429);

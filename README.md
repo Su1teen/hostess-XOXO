@@ -52,7 +52,7 @@ open http://localhost:3000/admin    # страница диагностики (R
 | `npm test`                  | Vitest                               |
 | `npm run db:migrate:dev`    | Миграции для разработки              |
 | `npm run db:migrate:deploy` | Миграции для production              |
-| `npm run db:seed`           | 27 идемпотентных exchange products     |
+| `npm run db:seed`           | 27 идемпотентных exchange products   |
 | `npm run cron:simulate`     | Одна симуляция следующего раунда     |
 
 ## API
@@ -80,6 +80,14 @@ open http://localhost:3000/admin    # страница диагностики (R
 - `GET|POST /api/v1/admin/rounds…` (`simulate`, `approve`, `publish`, `rollback`, `manual-export`)
 - `POST /api/v1/admin/rounds/:roundId/sales/increment` — тестовый атомарный increment продаж
 - `POST /api/v1/admin/telegram/test`
+
+Панель бармена (вход по PIN, далее заголовок `x-bartender-token`):
+
+- `POST /api/v1/bartender/auth`, `POST /api/v1/bartender/logout`
+- `GET /api/v1/bartender/exchange/products`, `GET /api/v1/bartender/exchange/status`
+- `POST /api/v1/bartender/exchange/products/:id/price-preview` — расчёт без записи в БД
+- `POST /api/v1/bartender/exchange/products/:id/apply-price` — цена считается на сервере
+- `POST /api/v1/bartender/exchange/products/:id/sales/increment|decrement`
 
 Интеграции:
 
@@ -109,14 +117,30 @@ open http://localhost:3000/admin    # страница диагностики (R
 Для migration и production используйте `npm run db:migrate:deploy`, для локальной разработки —
 `npm run db:migrate:dev`, затем `npm run db:seed`. Seed не импортирует `drinks_output.json`, не
 создаёт iiko товары и безопасен для повторного запуска: ключи `exchange-01`…`exchange-27`
-уникальны. Для этих позиций iiko IDs nullable и не используются в расчёте. `maxPrice` временно
-равен `startPrice * 1.5`, округлённому до `priceStep` (50 KZT). Все цены — Decimal в KZT.
+уникальны. Для этих позиций iiko IDs nullable и не используются в расчёте. Биржа стартует с
+`minPrice`, `originalPrice` — цена меню без скидки, `maxPrice` равен `originalPrice * 1.5`,
+округлённому до `priceStep` (50 KZT). Все цены — Decimal в KZT.
 
-Сервис продаж и модель `ExchangeSale` подготовлены для будущей панели бармена, но сама панель
-не входит в этот этап. Автоматический cron и crash-обвалы не запускаются; `CRASH` и
+Автоматический cron и crash-обвалы не запускаются; `CRASH` и
 `CrashEvent` существуют только как foundation. iiko остаётся read-only, iikoFront plugin не
 подключается. Для CI/локального окружения нужны `DATABASE_URL` и `ADMIN_API_KEY` (минимум 16
 символов); остальные переменные имеют значения по умолчанию из `.env.example`.
+
+## Режим «Бармен» на странице `/admin`
+
+На `/admin` есть кнопка «Бармен»: она открывает отдельную рабочую область на весь экран
+и скрывает техническую диагностику (без удаления её из кода). Вход — по PIN смены,
+админ-ключ там не нужен и не используется. PIN проверяется один раз, далее работает
+короткоживущий токен в заголовке `x-bartender-token`; в URL и логи PIN не попадает.
+
+Настройка PIN: `BARTENDER_PIN_HASH` (sha256 hex от PIN) — предпочтительно, либо временно
+`BARTENDER_PIN` (по умолчанию `1234`). PIN не равен `ADMIN_API_KEY`.
+
+Скидка всегда считается на сервере от цены меню:
+`final = max(round50(originalPrice * (1 - p/100)), minPrice)`. Выбранный и фактический процент
+хранятся отдельно; при упоре в `minPrice` панель показывает «Цена ограничена минимальной
+ценой». Применённая цена становится канонической для публичного API. Продажи пишутся в
+текущий раунд и не меняют цену сразу: спрос влияет на следующий раунд.
 
 ## Ограничения v0.1 и планы
 

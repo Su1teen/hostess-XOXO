@@ -25,6 +25,24 @@ export function calculateDemandScore(quantity: MoneyInput, average: MoneyInput):
   return sales.minus(avg).div(Decimal.max(avg, 1)).clamp(-1, 1);
 }
 
+/** Минимальное количество продаж, при котором спрос считается активным. */
+export const EXCHANGE_MIN_SALES_FOR_DEMAND = 2;
+
+/**
+ * Спрос биржи за раунд.
+ *
+ * Q_i < 2                 -> 0 (нет активного спроса, цена не меняется)
+ * иначе clamp((Q_i - Q_avg) / max(Q_avg, 1), 0, 1)
+ *
+ * Отрицательного спроса нет: отсутствие продаж не опускает цену ниже текущей.
+ */
+export function calculateExchangeDemandScore(quantity: MoneyInput, average: MoneyInput): Decimal {
+  const sales = toDecimal(quantity);
+  if (sales.lt(EXCHANGE_MIN_SALES_FOR_DEMAND)) return new Decimal(0);
+  const avg = toDecimal(average);
+  return sales.minus(avg).div(Decimal.max(avg, 1)).clamp(0, 1);
+}
+
 export interface PriceCalculationRequest {
   productId: string;
   productName: string;

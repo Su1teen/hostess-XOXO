@@ -23,7 +23,6 @@ import { swaggerPlugin } from './plugins/swagger.js';
 
 const MAX_BODY_BYTES = 512 * 1024;
 
-
 //hellyeah
 export async function buildApp(env: AppEnv = getEnv()): Promise<FastifyInstance> {
   const app = fastify({
