@@ -10,12 +10,8 @@ const round = {
 };
 const product = {
   id: 'product-1',
-  organizationId: 'org-1',
-  isExchangeProduct: true,
   isActive: true,
   currentPrice: new Prisma.Decimal(2000),
-  currentExchangePrice: new Prisma.Decimal(2000),
-  basePrice: new Prisma.Decimal(2000),
 };
 
 function makePrisma(roundValue = round) {
@@ -24,11 +20,11 @@ function makePrisma(roundValue = round) {
     quantity: 3,
     priceAtSale: new Prisma.Decimal(2000),
     roundId: 'round-1',
-    productId: 'product-1',
+    exchangeProductId: 'product-1',
   }));
   const tx = {
     priceRound: { findUnique: vi.fn(async () => roundValue) },
-    product: { findFirst: vi.fn(async () => product) },
+    exchangeProduct: { findFirst: vi.fn(async () => product) },
     exchangeSale: { upsert },
   };
   return {

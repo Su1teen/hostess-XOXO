@@ -53,13 +53,13 @@ abstract class BasePublisher implements PricePublisher {
     if (round.prices.length === 0) issues.push('В раунде нет ни одного товара');
     for (const price of round.prices) {
       if (price.calculatedPrice.lt(price.minPrice)) {
-        issues.push(`${price.product.name}: цена ниже minPrice`);
+        issues.push(`${price.exchangeProduct?.name ?? price.product?.name ?? 'Unknown'}: цена ниже minPrice`);
       }
       if (price.calculatedPrice.gt(price.maxPrice)) {
-        issues.push(`${price.product.name}: цена выше maxPrice`);
+        issues.push(`${price.exchangeProduct?.name ?? price.product?.name ?? 'Unknown'}: цена выше maxPrice`);
       }
       if (price.calculatedPrice.lte(0)) {
-        issues.push(`${price.product.name}: некорректная цена`);
+        issues.push(`${price.exchangeProduct?.name ?? price.product?.name ?? 'Unknown'}: некорректная цена`);
       }
     }
     return {

@@ -25,6 +25,11 @@ async function runOnce(): Promise<void> {
     await prisma.$connect();
     const services = createServices(prisma, env, logger as unknown as ContainerLogger);
 
+    if (await services.exchange.isPaused()) {
+      logger.info('биржа приостановлена, раунд не создаётся');
+      return;
+    }
+
     const result = await services.rounds.simulateRound({
       triggerSource: TRIGGER_SOURCE.CRON,
       createdBy: 'cron',

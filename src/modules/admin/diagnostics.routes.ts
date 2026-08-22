@@ -82,6 +82,14 @@ export async function diagnosticsRoutes(app: FastifyInstance): Promise<void> {
             }
           : null,
         products: counts,
+        exchange: {
+          total: (await app.prisma.exchangeProduct.count()),
+          active: (await app.prisma.exchangeProduct.count({ where: { isActive: true } })),
+          currentRound: publishedRound ? { id: publishedRound.id, roundKey: publishedRound.roundKey, priceItemCount: publishedRound.prices.filter((item) => item.exchangeProductId).length } : null,
+          nextRound: nextRound.roundKey,
+          scheduler: { intervalMinutes: interval, timezone, running: !(await app.services.exchange.isPaused()) },
+          paused: await app.services.exchange.isPaused(),
+        },
         rounds: {
           currentWindow: serializeWindow(getCurrentRound(new Date(), timezone, interval)),
           nextWindow: serializeWindow(nextRound),

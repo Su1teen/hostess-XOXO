@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import type { AppEnv } from '../config/env.js';
+import { ExchangeService } from '../modules/exchange/exchange.service.js';
 import { IikoSyncService } from '../modules/iiko/iiko.service.js';
 import { ProductsService } from '../modules/products/products.service.js';
 import { RoundsService } from '../modules/rounds/rounds.service.js';
@@ -11,6 +12,7 @@ import { TelegramService } from './telegram.service.js';
 
 export interface AppServices {
   audit: AuditService;
+  exchange: ExchangeService;
   iikoClient: IikoClient;
   iikoSync: IikoSyncService;
   telegram: TelegramService;
@@ -61,11 +63,12 @@ export function createServices(
     onAttempt: (attempt) => audit.recordIikoAttempt(attempt),
   });
 
+  const exchange = new ExchangeService(prisma);
   const products = new ProductsService(prisma, audit);
   const rounds = new RoundsService(prisma, env, audit);
   const sales = new SalesService(prisma);
   const iikoSync = new IikoSyncService(prisma, env, iikoClient, audit, telegram);
   const pricePublisher = createPricePublisher(env, rounds);
 
-  return { audit, iikoClient, iikoSync, telegram, products, rounds, sales, pricePublisher };
+  return { audit, exchange, iikoClient, iikoSync, telegram, products, rounds, sales, pricePublisher };
 }

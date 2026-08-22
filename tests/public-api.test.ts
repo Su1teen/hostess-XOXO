@@ -15,14 +15,15 @@ describe('public exchange API', () => {
       rounds: { getCurrentPublishedRound: vi.fn(async () => null) },
     } as never);
     app.decorate('prisma', {
-      product: {
+      exchangeProduct: {
         findMany: vi.fn(async () => [
           {
             id: 'exchange',
             name: 'Gin Tonic',
-            isExchangeProduct: true,
+            category: 'Коктейли',
+            currency: 'KZT',
+            currentPrice: 3200,
             isActive: true,
-            status: 'ACTIVE',
           },
         ]),
       },

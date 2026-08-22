@@ -36,7 +36,7 @@ export interface SimulateRoundResult {
 }
 
 export type RoundWithPrices = Prisma.PriceRoundGetPayload<{
-  include: { prices: { include: { product: true } } };
+  include: { prices: { include: { product: true; exchangeProduct: true } } };
 }>;
 
 const ALLOWED_TRANSITIONS: Record<RoundStatus, RoundStatus[]> = {
@@ -56,7 +56,7 @@ export function canTransition(from: RoundStatus, to: RoundStatus): boolean {
   return (ALLOWED_TRANSITIONS[from] ?? []).includes(to);
 }
 
-const ROUND_INCLUDE = { prices: { include: { product: true } } } as const;
+const ROUND_INCLUDE = { prices: { include: { product: true, exchangeProduct: true } } } as const;
 
 /** Бизнес-логика ценовых раундов. Никогда не вызывает write-операции iiko. */
 export class RoundsService {
@@ -98,8 +98,8 @@ export class RoundsService {
       return { created: false, round: existing };
     }
 
-    const products = await this.prisma.product.findMany({
-      where: { organizationId: organization.id, isExchangeProduct: true, isActive: true },
+    const products = await this.prisma.exchangeProduct.findMany({
+      where: { isActive: true },
       orderBy: { name: 'asc' },
     });
     if (products.length === 0) throw noExchangeProducts();
@@ -111,7 +111,7 @@ export class RoundsService {
     const sales = currentRound
       ? await this.prisma.exchangeSale.findMany({ where: { roundId: currentRound.id } })
       : [];
-    const salesByProduct = new Map(sales.map((sale) => [sale.productId, sale.quantity]));
+    const salesByProduct = new Map(sales.map((sale) => [sale.exchangeProductId, sale.quantity]));
     const totalSales = products.reduce(
       (sum, product) => sum + (salesByProduct.get(product.id) ?? 0),
       0,
@@ -128,19 +128,19 @@ export class RoundsService {
       const calculation = calculateNextPrice({
         productId: product.id,
         productName: product.name,
-        currentPrice: product.currentPrice ?? product.currentExchangePrice ?? product.basePrice,
-        basePrice: product.startPrice ?? product.basePrice,
+        currentPrice: product.currentPrice,
+        basePrice: product.startPrice,
         minPrice: product.minPrice,
         maxPrice: product.maxPrice,
         priceStep: product.priceStep,
-        maxChangePercent: product.maxChangePercent,
+        maxChangePercent: 10,
         demandScore: override?.demandScore ?? demandScore,
         salesQuantity,
         k: 0.1,
       });
 
       return {
-        productId: product.id,
+        exchangeProductId: product.id,
         price: calculation.calculatedPrice.toString(),
         soldQuantity: calculation.salesQuantity.toString(),
         previousPrice: calculation.previousPrice.toString(),
@@ -266,13 +266,17 @@ export class RoundsService {
           where: { id: price.id },
           data: { publishedPrice: price.calculatedPrice, status: 'PUBLISHED' },
         });
-        await tx.product.update({
-          where: { id: price.productId },
-          data: {
-            currentExchangePrice: price.calculatedPrice,
-            currentPrice: price.calculatedPrice,
-          },
-        });
+        if (price.exchangeProductId) {
+          await tx.exchangeProduct.update({
+            where: { id: price.exchangeProductId },
+            data: { currentPrice: price.calculatedPrice },
+          });
+        } else if (price.productId) {
+          await tx.product.update({
+            where: { id: price.productId },
+            data: { currentExchangePrice: price.calculatedPrice, currentPrice: price.calculatedPrice },
+          });
+        }
       }
       return tx.priceRound.update({
         where: { id: round.id },
@@ -324,10 +328,12 @@ export class RoundsService {
       });
       if (previous) {
         for (const price of previous.prices) {
-          await tx.product.update({
-            where: { id: price.productId },
-            data: { currentExchangePrice: price.publishedPrice ?? price.calculatedPrice },
-          });
+          if (price.exchangeProductId) {
+            await tx.exchangeProduct.update({
+              where: { id: price.exchangeProductId },
+              data: { currentPrice: price.publishedPrice ?? price.calculatedPrice },
+            });
+          }
         }
       }
       return rolledBack;
@@ -353,7 +359,12 @@ export class RoundsService {
   /** Только активный опубликованный раунд, покрывающий момент `at`. */
   async getCurrentPublishedRound(at: Date = new Date()): Promise<RoundWithPrices | null> {
     const active = await this.prisma.priceRound.findFirst({
-      where: { status: 'PUBLISHED', startsAt: { lte: at }, endsAt: { gt: at } },
+      where: {
+        status: 'PUBLISHED',
+        startsAt: { lte: at },
+        endsAt: { gt: at },
+        prices: { some: { exchangeProductId: { not: null } } },
+      },
       orderBy: { startsAt: 'desc' },
       include: ROUND_INCLUDE,
     });
@@ -377,9 +388,7 @@ export class RoundsService {
   }
 
   async ensureExchangeProductsExist(): Promise<number> {
-    const count = await this.prisma.product.count({
-      where: { isExchangeProduct: true, isActive: true },
-    });
+    const count = await this.prisma.exchangeProduct.count({ where: { isActive: true } });
     if (count === 0) throw noExchangeProducts();
     return count;
   }
@@ -396,9 +405,9 @@ export class RoundsService {
       status: round.status,
       timezone: round.timezone,
       items: round.prices.map((price) => ({
-        productName: price.product.name,
-        iikoProductId: price.product.iikoProductId,
-        currentPrice: toMoney(price.previousPrice.toString()).toNumber(),
+        productName: price.exchangeProduct?.name ?? price.product?.name ?? 'Unknown',
+        iikoProductId: price.product?.iikoProductId ?? null,
+        currentPrice: toMoney((price.previousPrice ?? price.exchangeProduct?.currentPrice ?? 0).toString()).toNumber(),
         nextPrice: toMoney((price.publishedPrice ?? price.calculatedPrice).toString()).toNumber(),
         startTime: round.startsAt.toISOString(),
         roundId: round.id,

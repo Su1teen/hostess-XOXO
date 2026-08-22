@@ -96,6 +96,31 @@ model Organization {
   @@map("organizations")
 }
 
+model ExchangeProduct {
+  id           String   @id @default(uuid()) @db.Uuid
+  slug         String   @unique
+  name         String
+  category     String
+  volumeMl     Int?     @map("volume_ml")
+  currency     String   @default("KZT")
+  startPrice   Decimal  @map("start_price") @db.Decimal(12, 2)
+  currentPrice Decimal  @map("current_price") @db.Decimal(12, 2)
+  minPrice     Decimal  @map("min_price") @db.Decimal(12, 2)
+  maxPrice     Decimal  @map("max_price") @db.Decimal(12, 2)
+  priceStep    Decimal  @default(50) @map("price_step") @db.Decimal(12, 2)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  roundPrices  RoundPrice[]
+  sales        ExchangeSale[]
+  crashEvents  CrashEvent[]
+
+  @@index([isActive])
+  @@index([category])
+  @@map("exchange_products")
+}
+
 model Product {
   id                    String        @id @default(uuid()) @db.Uuid
   organizationId        String        @map("organization_id") @db.Uuid
@@ -196,10 +221,11 @@ model PriceRound {
 model RoundPrice {
   id                String      @id @default(uuid()) @db.Uuid
   roundId           String      @map("round_id") @db.Uuid
-  productId         String      @map("product_id") @db.Uuid
+  productId         String?     @map("product_id") @db.Uuid
+  exchangeProductId String?     @map("exchange_product_id") @db.Uuid
   price             Decimal     @db.Decimal(12, 2)
   soldQuantity      Decimal     @default(0) @map("sold_quantity") @db.Decimal(12, 3)
-  previousPrice     Decimal     @map("previous_price") @db.Decimal(12, 2)
+  previousPrice     Decimal?    @map("previous_price") @db.Decimal(12, 2)
   calculatedPrice   Decimal     @map("calculated_price") @db.Decimal(12, 2)
   publishedPrice    Decimal?    @map("published_price") @db.Decimal(12, 2)
   minPrice          Decimal     @map("min_price") @db.Decimal(12, 2)
@@ -214,43 +240,53 @@ model RoundPrice {
   createdAt         DateTime    @default(now()) @map("created_at")
   updatedAt         DateTime    @updatedAt @map("updated_at")
 
-  round   PriceRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
-  product Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  round           PriceRound      @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  product         Product?        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  exchangeProduct ExchangeProduct? @relation(fields: [exchangeProductId], references: [id], onDelete: Cascade)
 
   @@unique([roundId, productId])
+  @@unique([roundId, exchangeProductId])
   @@index([productId])
+  @@index([exchangeProductId])
   @@map("round_prices")
 }
 
 model ExchangeSale {
-  id          String     @id @default(uuid()) @db.Uuid
-  roundId     String     @map("round_id") @db.Uuid
-  productId   String     @map("product_id") @db.Uuid
-  quantity    Int
+  id               String          @id @default(uuid()) @db.Uuid
+  roundId          String          @map("round_id") @db.Uuid
+  productId        String?         @map("product_id") @db.Uuid
+  exchangeProductId String?        @map("exchange_product_id") @db.Uuid
+  quantity         Int
   priceAtSale Decimal    @map("price_at_sale") @db.Decimal(12, 2)
   source      SaleSource @default(MANUAL_PANEL)
   createdAt   DateTime   @default(now()) @map("created_at")
   updatedAt   DateTime   @updatedAt @map("updated_at")
 
-  round   PriceRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
-  product Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  round           PriceRound       @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  product         Product?         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  exchangeProduct ExchangeProduct? @relation(fields: [exchangeProductId], references: [id], onDelete: Cascade)
 
   @@unique([roundId, productId])
+  @@unique([roundId, exchangeProductId])
   @@index([roundId, productId])
+  @@index([roundId, exchangeProductId])
   @@map("exchange_sales")
 }
 
 model CrashEvent {
-  id              String   @id @default(uuid()) @db.Uuid
-  roundId         String   @map("round_id") @db.Uuid
-  productId       String   @map("product_id") @db.Uuid
+  id               String          @id @default(uuid()) @db.Uuid
+  roundId          String          @map("round_id") @db.Uuid
+  productId        String?         @map("product_id") @db.Uuid
+  exchangeProductId String?        @map("exchange_product_id") @db.Uuid
   discountPercent Decimal  @map("discount_percent") @db.Decimal(6, 2)
   createdAt       DateTime @default(now()) @map("created_at")
 
-  round   PriceRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
-  product Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  round           PriceRound       @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  product         Product?         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  exchangeProduct ExchangeProduct? @relation(fields: [exchangeProductId], references: [id], onDelete: Cascade)
 
   @@index([roundId, productId])
+  @@index([roundId, exchangeProductId])
   @@map("crash_events")
 }
 

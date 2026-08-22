@@ -257,8 +257,8 @@ function serializeRound(round: RoundWithPrices) {
     currency: CURRENCY,
     prices: round.prices.map((price) => ({
       productId: price.productId,
-      productName: price.product.name,
-      previousPrice: Number(price.previousPrice.toString()),
+      productName: price.exchangeProduct?.name ?? price.product?.name ?? 'Unknown',
+      previousPrice: price.previousPrice === null ? null : Number(price.previousPrice.toString()),
       calculatedPrice: Number(price.calculatedPrice.toString()),
       publishedPrice:
         price.publishedPrice === null ? null : Number(price.publishedPrice.toString()),
