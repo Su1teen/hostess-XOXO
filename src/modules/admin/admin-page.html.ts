@@ -914,7 +914,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
                 throw new Error('UNAUTHORIZED');
               }
               if (!response.ok) {
-                var text = json && json.error ? json.error.message : 'Ошибка запроса';
+                var text = errorText(json, 'Ошибка запроса');
                 setConnection(false);
                 throw new Error(text);
               }
@@ -922,6 +922,14 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
               return json;
             });
           });
+        }
+
+        function errorText(json, fallback) {
+          if (json) {
+            if (json.error && typeof json.error === 'object' && json.error.message) return json.error.message;
+            if (typeof json.message === 'string' && json.message) return json.message;
+          }
+          return fallback;
         }
 
         function setConnection(ok) {
@@ -980,7 +988,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
             return response.json().catch(function () { return {}; }).then(function (json) {
               el('bartenderPin').value = '';
               if (!response.ok) {
-                showLogin(json && json.error ? json.error.message : 'Не удалось войти.');
+                showLogin(errorText(json, 'Не удалось войти.'));
                 return;
               }
               setSession(json.token, json.expiresAt);
