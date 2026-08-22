@@ -41,6 +41,8 @@ export const envSchema = z
 
     ADMIN_API_KEY: z.string().min(16, 'ADMIN_API_KEY обязателен, минимум 16 символов'),
     ADMIN_API_KEY_HEADER: z.string().default('x-admin-api-key'),
+    BARTENDER_PIN_HASH: optionalString,
+    BARTENDER_PIN: optionalString,
 
     CORS_ORIGINS: csvList,
 

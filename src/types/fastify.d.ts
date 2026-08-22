@@ -15,6 +15,12 @@ declare module 'fastify' {
       request: import('fastify').FastifyRequest,
       reply: import('fastify').FastifyReply,
     ) => Promise<void>;
+    requireBartender: (
+      request: import('fastify').FastifyRequest,
+      reply: import('fastify').FastifyReply,
+    ) => Promise<void>;
+    createBartenderSession: () => string;
+    clearBartenderSession: (token: string) => boolean;
   }
 }
 

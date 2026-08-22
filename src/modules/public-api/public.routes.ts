@@ -6,12 +6,12 @@ import type { RoundWithPrices } from '../rounds/rounds.service.js';
 
 const publicProductSchema = {
   type: 'object',
-  required: ['id', 'name', 'category', 'price', 'currency', 'previousPrice', 'changePercent', 'isAvailable'],
+  required: ['id', 'name', 'category', 'price', 'currency', 'previousPrice', 'changePercent', 'effectiveDiscountPercent', 'roundEndsAt', 'isAvailable'],
   additionalProperties: false,
   properties: {
     id: { type: 'string' }, name: { type: 'string' }, category: { type: 'string' },
     price: { type: 'number' }, currency: { type: 'string' },
-    previousPrice: { type: ['number', 'null'] }, changePercent: { type: 'number' }, isAvailable: { type: 'boolean' },
+    previousPrice: { type: ['number', 'null'] }, changePercent: { type: 'number' }, effectiveDiscountPercent: { type: 'number' }, roundEndsAt: { type: 'string' }, isAvailable: { type: 'boolean' },
   },
 } as const;
 
@@ -54,7 +54,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     const prices = new Map((round?.prices ?? []).filter((item) => item.exchangeProductId).map((item) => [item.exchangeProductId!, item]));
     return { generatedAt: new Date().toISOString(), timezone: app.env.APP_TIMEZONE, products: products.map((product) => {
       const item = prices.get(product.id);
-      return { id: product.id, name: product.name, category: product.category, price: item ? toNumber((item.publishedPrice ?? item.calculatedPrice).toString()) : toNumber(product.currentPrice.toString()), currency: product.currency, previousPrice: item?.previousPrice === null || item?.previousPrice === undefined ? null : toNumber(item.previousPrice.toString()), changePercent: item ? Number(item.changePercent.toString()) : 0, isAvailable: Boolean(item) };
+      return { id: product.id, name: product.name, category: product.category, price: item ? toNumber((item.publishedPrice ?? item.calculatedPrice).toString()) : toNumber(product.currentPrice.toString()), currency: product.currency, previousPrice: item?.previousPrice === null || item?.previousPrice === undefined ? null : toNumber(item.previousPrice.toString()), changePercent: item ? Number(item.changePercent.toString()) : 0, effectiveDiscountPercent: toNumber(product.currentDiscountPercent ?? (product.startPrice ? ((Number(product.startPrice) - Number(product.currentPrice)) / Number(product.startPrice) * 100) : 0)), roundEndsAt: round?.endsAt.toISOString() ?? '', isAvailable: product.isActive };
     }) };
   });
 }
@@ -63,6 +63,6 @@ function mapProducts(round: RoundWithPrices) {
   return round.prices.filter((item) => item.exchangeProduct?.isActive && item.exchangeProductId).map((item) => ({
     id: item.exchangeProduct!.id, name: item.exchangeProduct!.name, category: item.exchangeProduct!.category,
     price: toNumber((item.publishedPrice ?? item.calculatedPrice).toString()), currency: item.exchangeProduct!.currency,
-    previousPrice: item.previousPrice === null ? null : toNumber(item.previousPrice.toString()), changePercent: Number(item.changePercent.toString()), isAvailable: item.exchangeProduct!.isActive,
+    previousPrice: item.previousPrice === null ? null : toNumber(item.previousPrice.toString()), changePercent: Number(item.changePercent.toString()), effectiveDiscountPercent: toNumber(item.exchangeProduct!.currentDiscountPercent ?? (item.exchangeProduct!.startPrice ? ((Number(item.exchangeProduct!.startPrice) - Number(item.exchangeProduct!.currentPrice)) / Number(item.exchangeProduct!.startPrice) * 100) : 0)), roundEndsAt: round.endsAt.toISOString(), isAvailable: item.exchangeProduct!.isActive,
   })).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
 }

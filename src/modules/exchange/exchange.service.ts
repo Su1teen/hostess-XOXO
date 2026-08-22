@@ -20,6 +20,7 @@ export class ExchangeService {
           volumeMl: product.volumeMl,
           currency: 'KZT',
           startPrice: product.startPrice,
+          originalPrice: product.startPrice,
           minPrice: product.minPrice,
           maxPrice: maxPrice.toFixed(2),
           priceStep: 50,
@@ -32,7 +33,9 @@ export class ExchangeService {
           volumeMl: product.volumeMl,
           currency: 'KZT',
           startPrice: product.startPrice,
-          currentPrice: product.startPrice,
+          originalPrice: product.startPrice,
+          currentPrice: product.minPrice,
+          currentDiscountPercent: discountPercent(product.startPrice, product.minPrice),
           minPrice: product.minPrice,
           maxPrice: maxPrice.toFixed(2),
           priceStep: 50,
@@ -44,8 +47,10 @@ export class ExchangeService {
   }
 
   async ensureInitialRound() {
+    const now = new Date();
+    const window = getCurrentRound(now, EXCHANGE_TIMEZONE, EXCHANGE_INTERVAL_MINUTES);
     const existing = await this.prisma.priceRound.findFirst({
-      where: { roundKey: 'exchange-initial' },
+      where: { roundKey: window.roundKey },
       include: ROUND_INCLUDE,
     });
     if (existing) return { created: false, round: existing };
@@ -54,13 +59,11 @@ export class ExchangeService {
     if (products.length === 0) return null;
     const organization = await this.prisma.organization.findFirst({ where: { isSelected: true } });
     if (!organization) return null;
-    const now = new Date();
-    const window = getCurrentRound(now, EXCHANGE_TIMEZONE, EXCHANGE_INTERVAL_MINUTES);
     try {
       const round = await this.prisma.priceRound.create({
         data: {
           organizationId: organization.id,
-          roundKey: 'exchange-initial',
+          roundKey: window.roundKey,
           startsAt: window.startsAt,
           endsAt: window.endsAt,
           timezone: EXCHANGE_TIMEZONE,
@@ -71,10 +74,12 @@ export class ExchangeService {
           prices: {
             create: products.map((product) => ({
               exchangeProductId: product.id,
-              price: product.startPrice,
+              price: product.currentPrice,
               previousPrice: null,
-              calculatedPrice: product.startPrice,
-              publishedPrice: product.startPrice,
+              calculatedPrice: product.currentPrice,
+              publishedPrice: product.currentPrice,
+              selectedDiscountPercent: product.currentDiscountPercent,
+              actualDiscountPercent: product.actualDiscountPercent ?? product.currentDiscountPercent,
               minPrice: product.minPrice,
               maxPrice: product.maxPrice,
               priceStep: product.priceStep,
@@ -128,6 +133,11 @@ export class ExchangeService {
       scheduler: { intervalMinutes: EXCHANGE_INTERVAL_MINUTES, timezone: EXCHANGE_TIMEZONE, running: !paused },
     };
   }
+}
+
+function discountPercent(original: number, current: number): number {
+  if (original === 0) return 0;
+  return Number((((original - current) / original) * 100).toFixed(2));
 }
 
 function isUniqueViolation(error: unknown): boolean {

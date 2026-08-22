@@ -1,7 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import cron from 'node-cron';
 import { pino } from 'pino';
-import { TRIGGER_SOURCE } from '../config/constants.js';
 import { getEnv } from '../config/env.js';
 import { AppError } from '../lib/errors.js';
 import { buildLoggerOptions } from '../plugins/logger.js';
@@ -30,19 +29,9 @@ async function runOnce(): Promise<void> {
       return;
     }
 
-    const result = await services.rounds.simulateRound({
-      triggerSource: TRIGGER_SOURCE.CRON,
-      createdBy: 'cron',
-    });
-
-    logger.info(
-      {
-        roundKey: result.round.roundKey,
-        created: result.created,
-        products: result.round.prices.length,
-      },
-      result.created ? 'раунд симулирован' : 'раунд для этого окна уже существует',
-    );
+    logger.info('round transition started');
+    const round = await services.rounds.transitionRound();
+    logger.info({ roundKey: round?.roundKey ?? null, products: round?.prices.length ?? 0 }, 'round transition completed');
   } catch (error) {
     const message = sanitizeMessage(error instanceof Error ? error.message : String(error));
     logger.error({ code: error instanceof AppError ? error.code : 'INTERNAL_ERROR' }, message);

@@ -18,13 +18,8 @@ export async function exchangeRoutes(app: FastifyInstance): Promise<void> {
     app.post<{ Params: { id: string } }>(`${API_PREFIX}/admin/exchange/products/:id/${action}`, auth, async (request) => app.prisma.exchangeProduct.update({ where: { id: request.params.id }, data: { isActive: active } }));
   }
   app.post(`${API_PREFIX}/admin/exchange/rounds/run`, auth, async () => {
-    const current = await app.services.rounds.getCurrentPublishedRound();
-    if (!current) {
-      const initial = await app.services.exchange.ensureInitialRound();
-      if (initial?.created || (initial?.round && initial.round.endsAt > new Date())) return { created: initial?.created ?? false, round: initial?.round };
-    }
-    const result = await app.services.rounds.simulateRound({ triggerSource: 'MANUAL', createdBy: 'admin' });
-    return { created: result.created, round: result.round };
+    const round = await app.services.rounds.transitionRound();
+    return { created: Boolean(round), round };
   });
   app.post(`${API_PREFIX}/admin/exchange/pause`, auth, async () => ({ paused: await app.services.exchange.setPaused(true) }));
   app.post(`${API_PREFIX}/admin/exchange/resume`, auth, async () => ({ paused: await app.services.exchange.setPaused(false) }));

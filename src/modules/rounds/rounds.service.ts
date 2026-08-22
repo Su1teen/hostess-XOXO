@@ -8,7 +8,7 @@ import {
   organizationNotSelected,
   roundNotFound,
 } from '../../lib/errors.js';
-import { toMoney } from '../../lib/money.js';
+import { changePercent, toMoney } from '../../lib/money.js';
 import { getCurrentRound, getNextRound, getRoundForInstant, getRoundKey } from '../../lib/time.js';
 import type { AuditService } from '../../services/audit.service.js';
 import { calculateDemandScore, calculateNextPrice } from '../../services/price-engine.service.js';
@@ -50,6 +50,7 @@ const ALLOWED_TRANSITIONS: Record<RoundStatus, RoundStatus[]> = {
   FAILED: ['CANCELLED', 'SIMULATED'],
   ROLLED_BACK: [],
   CANCELLED: [],
+  CLOSED: [],
 };
 
 export function canTransition(from: RoundStatus, to: RoundStatus): boolean {
@@ -202,6 +203,42 @@ export class RoundsService {
       }
       throw error;
     }
+  }
+
+  /** Closes the active window and publishes exactly one next window. */
+  async transitionRound(now = new Date()): Promise<RoundWithPrices | null> {
+    const organization = await this.getSelectedOrganization();
+    const window = getCurrentRound(now, this.env.APP_TIMEZONE, this.interval);
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('exchange-round-transition'))`;
+      const active = await tx.priceRound.findFirst({
+        where: { organizationId: organization.id, status: 'PUBLISHED', endsAt: { lte: now } },
+        orderBy: { endsAt: 'desc' },
+        include: ROUND_INCLUDE,
+      });
+      const nextWindow = window;
+      const existing = await tx.priceRound.findUnique({ where: { roundKey: nextWindow.roundKey }, include: ROUND_INCLUDE });
+      if (existing) return existing;
+      if (!active) return null;
+      if (existing) return existing;
+      const products = await tx.exchangeProduct.findMany({ where: { isActive: true }, orderBy: { name: 'asc' } });
+      const sales = await tx.exchangeSale.findMany({ where: { roundId: active.id, exchangeProductId: { not: null } } });
+      const quantities = new Map<string, number>();
+      for (const sale of sales) quantities.set(sale.exchangeProductId!, (quantities.get(sale.exchangeProductId!) ?? 0) + sale.quantity);
+      const average = products.reduce((sum, product) => sum + (quantities.get(product.id) ?? 0), 0) / Math.max(products.length, 1);
+      const rows = products.map((product) => {
+        const quantity = quantities.get(product.id) ?? 0;
+        const demandScore = quantity < 2 ? 0 : Math.max(0, Math.min(1, (quantity - average) / Math.max(average, 1)));
+        const calculation = calculateNextPrice({ productId: product.id, productName: product.name, currentPrice: product.currentPrice, basePrice: product.originalPrice || product.startPrice, minPrice: product.minPrice, maxPrice: product.maxPrice, priceStep: product.priceStep, maxChangePercent: 10, demandScore, salesQuantity: quantity, k: 0.1 });
+        const nextPrice = quantity === 0 ? product.currentPrice : calculation.calculatedPrice;
+        const discount = product.originalPrice.eq(0) ? 0 : product.originalPrice.minus(nextPrice).div(product.originalPrice).mul(100).toDecimalPlaces(2);
+        return { product, quantity, nextPrice, discount, calculation };
+      });
+      await tx.priceRound.update({ where: { id: active.id }, data: { status: 'CLOSED' } });
+      const created = await tx.priceRound.create({ data: { organizationId: organization.id, roundKey: nextWindow.roundKey, startsAt: nextWindow.startsAt, endsAt: nextWindow.endsAt, timezone: this.env.APP_TIMEZONE, status: 'PUBLISHED', algorithmVersion: PRICE_ALGORITHM_VERSION, triggerSource: 'CRON', publishedAt: now, prices: { create: rows.map(({ product, quantity, nextPrice, discount, calculation }) => ({ exchangeProductId: product.id, price: nextPrice, previousPrice: product.currentPrice, calculatedPrice: nextPrice, publishedPrice: nextPrice, minPrice: product.minPrice, maxPrice: product.maxPrice, priceStep: product.priceStep, selectedDiscountPercent: discount, actualDiscountPercent: discount, soldQuantity: quantity, salesQuantity: quantity, demandScore: calculation.demandScore, changePercent: changePercent(product.currentPrice, nextPrice), calculationInput: calculation.input as unknown as Prisma.InputJsonValue, calculationResult: calculation.result as unknown as Prisma.InputJsonValue, status: 'PUBLISHED' as RoundStatus })) } }, include: ROUND_INCLUDE });
+      for (const row of rows) await tx.exchangeProduct.update({ where: { id: row.product.id }, data: { currentPrice: row.nextPrice, currentDiscountPercent: row.discount, actualDiscountPercent: row.discount } });
+      return created;
+    });
   }
 
   async listRounds(params: { limit?: number; status?: RoundStatus } = {}) {
