@@ -447,4 +447,13 @@ describe('страница /admin', () => {
     expect(ADMIN_PAGE_HTML).toContain("quantity.min = '0'");
     expect(ADMIN_PAGE_HTML).toContain("quantity.max = '9999'");
   });
+
+  it('имеет delta-контрол и мобильную responsive-разметку', () => {
+    expect(ADMIN_PAGE_HTML).toContain('Изменить на:');
+    expect(ADMIN_PAGE_HTML).toContain('Убавить ');
+    expect(ADMIN_PAGE_HTML).toContain('Добавить ');
+    expect(ADMIN_PAGE_HTML).toContain("'/exchange/products/' + product.id + '/sales/' + endpoint");
+    expect(ADMIN_PAGE_HTML).toContain('@media (max-width: 700px)');
+    expect(ADMIN_PAGE_HTML).toContain('min-height: 44px');
+  });
 });
