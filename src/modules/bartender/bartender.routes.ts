@@ -26,6 +26,13 @@ const saleQuantityBody = {
   properties: { quantity: { type: 'integer', minimum: 1 } },
 } as const;
 
+const absoluteQuantityBody = {
+  type: 'object',
+  required: ['quantity'],
+  additionalProperties: false,
+  properties: { quantity: { type: 'integer', minimum: 0, maximum: 9999 } },
+} as const;
+
 function tokenOf(request: FastifyRequest): string | undefined {
   const raw = request.headers[BARTENDER_TOKEN_HEADER];
   return Array.isArray(raw) ? raw[0] : raw;
@@ -146,6 +153,24 @@ export async function bartenderRoutes(app: FastifyInstance): Promise<void> {
     },
     async (request) =>
       app.services.bartender.incrementSales(request.params.id, request.body.quantity, {
+        requestId: request.id,
+        ipAddress: request.ip ?? null,
+      }),
+  );
+
+  app.put<{ Params: { id: string }; Body: { quantity: number } }>(
+    `${API_PREFIX}/bartender/exchange/products/:id/sales/quantity`,
+    {
+      preHandler: requireSession,
+      schema: {
+        tags: ['Bartender'],
+        summary: 'Установить итоговое количество продаж в текущем раунде',
+        params: productParams,
+        body: absoluteQuantityBody,
+      },
+    },
+    async (request) =>
+      app.services.bartender.setSalesQuantity(request.params.id, request.body.quantity, {
         requestId: request.id,
         ipAddress: request.ip ?? null,
       }),

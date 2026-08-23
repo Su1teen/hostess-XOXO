@@ -208,6 +208,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
       .bt-sales { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
       .bt-sales button { margin: 0; padding: 8px 14px; font-size: 14px; background: #21262d; border: 1px solid var(--border); cursor: pointer; }
       .bt-sales button:disabled { opacity: 0.6; cursor: wait; }
+      .bt-sales input { width: 72px; margin: 0; padding: 8px 6px; text-align: center; font-size: 15px; }
       .bt-manual-header { font-size: 12px; margin: 4px 0 6px; text-transform: uppercase; letter-spacing: 0.04em; }
       .bt-apply { display: flex; gap: 6px; margin-bottom: 6px; }
       .bt-apply button { margin: 0; flex: 1; padding: 10px 8px; font-size: 14px; }
@@ -892,7 +893,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         var loginMsg = el('bartenderLoginMsg');
         var grid = el('btGrid');
         var money = new Intl.NumberFormat('ru-RU');
-        var state = { products: [], filter: 'Все', query: '', cards: {}, timer: null };
+        var state = { products: [], filter: 'Все', query: '', cards: {}, timer: null, roundEndsAt: null };
 
         function token() { return sessionStorage.getItem(TOKEN_KEY) || ''; }
 
@@ -1018,7 +1019,15 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
             api('GET', '/exchange/products'),
             api('GET', '/exchange/status'),
           ]).then(function (results) {
-            state.products = results[0].products || [];
+            var products = results[0].products || [];
+            products.forEach(function (product) {
+              var card = cardState(product.id);
+              if (!card.quantityPending && !card.quantityEditing) {
+                card.confirmedQuantity = product.salesQuantity;
+                card.quantityDraft = String(product.salesQuantity);
+              }
+            });
+            state.products = products;
             renderStatus(results[1]);
             renderFilters();
             renderGrid();
@@ -1027,6 +1036,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
 
         function renderStatus(status) {
           var round = status.currentRound;
+          state.roundEndsAt = round ? round.endsAt : null;
           el('btRound').textContent = 'раунд: ' + (round ? round.roundKey : '—') +
             (status.secondsRemaining === null || status.secondsRemaining === undefined
               ? ''
@@ -1073,12 +1083,29 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
 
         function cardState(id) {
           if (!state.cards[id]) {
-            state.cards[id] = { selected: null, preview: null, qty: 1, note: '', kind: '' };
+            state.cards[id] = {
+              selected: null,
+              preview: null,
+              confirmedQuantity: 0,
+              quantityDraft: '0',
+              quantityEditing: false,
+              quantityPending: false,
+              salePending: false,
+              note: '',
+              kind: '',
+            };
           }
           return state.cards[id];
         }
 
-        function price(value) { return money.format(value) + ' ₸'; }
+        function discountLabel(value) {
+          var rounded = Math.round(Number(value));
+          return rounded < 0
+            ? 'Наценка: ' + Math.abs(rounded) + '%'
+            : 'Скидка: ' + rounded + '%';
+        }
+
+        function price(value) { return money.format(Number(value)) + ' ₸'; }
 
         function time(value) {
           if (!value) { return '—'; }
@@ -1118,8 +1145,16 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           prices.appendChild(priceCell('Меню', price(product.originalPrice), ''));
           prices.appendChild(priceCell('Минимум', price(product.minPrice), ''));
           prices.appendChild(priceCell('Сейчас', price(product.currentPrice), 'bt-now'));
-          prices.appendChild(priceCell('Скидка', product.currentDiscountPercent.toFixed(1) + '%', ''));
+          prices.appendChild(priceCell('Скидка', discountLabel(product.currentDiscountPercent), ''));
+          if (Number(product.currentPrice) === Number(product.minPrice)) {
+            prices.appendChild(priceCell('Статус', 'Минимальная цена', 'status warn'));
+          }
           node.appendChild(prices);
+
+          var roundInfo = document.createElement('div');
+          roundInfo.className = 'bt-cat';
+          roundInfo.textContent = 'Раунд до: ' + time(state.roundEndsAt);
+          node.appendChild(roundInfo);
 
           var salePrimary = document.createElement('div');
           salePrimary.className = 'bt-sale-primary';
@@ -1136,8 +1171,11 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
             api('POST', '/exchange/products/' + product.id + '/sales/increment', { quantity: 1 })
               .then(function (result) {
                 product.salesQuantity = result.quantity || result.salesQuantity || 0;
+                card.confirmedQuantity = product.salesQuantity;
+                card.quantityDraft = String(product.salesQuantity);
+                card.quantityEditing = false;
                 var msg = 'Продажа записана: ' + price(result.priceAtSale) +
-                  ' · скидка ' + (result.discountPercentAtSale !== undefined ? result.discountPercentAtSale.toFixed(1) : '?') + '%' +
+                  ' · ' + discountLabel(result.discountPercentAtSale) +
                   ' · до ' + time(result.roundEndsAt);
                 note(card, msg, 'ok');
               })
@@ -1162,24 +1200,47 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           saleSecondary.className = 'bt-sales';
           var minus = document.createElement('button');
           minus.type = 'button';
-          minus.textContent = '−1';
-          minus.disabled = card.salePending;
+          minus.textContent = '−';
+          minus.disabled = card.quantityPending;
           minus.addEventListener('click', function () {
-            if (card.salePending) { return; }
-            card.salePending = true;
-            minus.disabled = true;
-            api('POST', '/exchange/products/' + product.id + '/sales/decrement', { quantity: 1 })
-              .then(function (result) {
-                product.salesQuantity = result.quantity || result.salesQuantity || 0;
-                note(card, 'Убрана 1 продажа · осталось ' + product.salesQuantity, 'ok');
-              })
-              .catch(function (error) { note(card, error.message, 'err'); })
-              .finally(function () {
-                card.salePending = false;
-                minus.disabled = false;
-              });
+            var next = Math.max(0, card.confirmedQuantity - 1);
+            saveQuantity(product, card, next);
           });
+          var quantity = document.createElement('input');
+          quantity.type = 'number';
+          quantity.min = '0';
+          quantity.max = '9999';
+          quantity.step = '1';
+          quantity.inputMode = 'numeric';
+          quantity.value = card.quantityEditing ? card.quantityDraft : String(card.confirmedQuantity);
+          quantity.disabled = card.quantityPending;
+          quantity.addEventListener('input', function () {
+            card.quantityEditing = true;
+            card.quantityDraft = quantity.value;
+          });
+          quantity.addEventListener('change', function () {
+            saveQuantity(product, card, quantity.value);
+          });
+          quantity.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              saveQuantity(product, card, quantity.value);
+            }
+          });
+          var plus = document.createElement('button');
+          plus.type = 'button';
+          plus.textContent = '+';
+          plus.disabled = card.quantityPending;
+          plus.addEventListener('click', function () {
+            saveQuantity(product, card, Math.min(9999, card.confirmedQuantity + 1));
+          });
+          var quantityLabel = document.createElement('span');
+          quantityLabel.className = 'bt-count';
+          quantityLabel.textContent = 'Продано в раунде:';
+          saleSecondary.appendChild(quantityLabel);
           saleSecondary.appendChild(minus);
+          saleSecondary.appendChild(quantity);
+          saleSecondary.appendChild(plus);
           node.appendChild(saleSecondary);
 
           var manualHeader = document.createElement('div');
@@ -1209,7 +1270,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           preview.className = 'bt-preview muted';
           if (card.preview) {
             preview.textContent = 'Итог: ' + price(card.preview.finalPrice) +
-              ' · факт. скидка ' + card.preview.actualDiscountPercent.toFixed(1) + '%' +
+              ' · ' + discountLabel(card.preview.actualDiscountPercent) +
               (card.preview.minPriceApplied ? ' · Цена ограничена минимальной ценой' : '');
             preview.className = 'bt-preview ' + (card.preview.minPriceApplied ? 'status warn' : 'status ok');
           } else {
@@ -1273,6 +1334,36 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           strong.textContent = value;
           cell.appendChild(strong);
           return cell;
+        }
+
+        function saveQuantity(product, card, rawValue) {
+          if (card.quantityPending) { return; }
+          var value = rawValue === '' ? 0 : Number(rawValue);
+          if (!Number.isSafeInteger(value) || value < 0 || value > 9999) {
+            card.quantityEditing = true;
+            card.quantityDraft = String(rawValue);
+            note(card, 'Количество должно быть целым числом от 0 до 9999.', 'err');
+            return;
+          }
+          card.quantityPending = true;
+          card.quantityEditing = false;
+          card.quantityDraft = String(value);
+          api('PUT', '/exchange/products/' + product.id + '/sales/quantity', { quantity: value })
+            .then(function (result) {
+              product.salesQuantity = result.quantity;
+              card.confirmedQuantity = result.quantity;
+              card.quantityDraft = String(result.quantity);
+              note(card, 'Сохранено · до ' + time(result.roundEndsAt), 'ok');
+            })
+            .catch(function (error) {
+              card.quantityEditing = false;
+              card.quantityDraft = String(card.confirmedQuantity);
+              note(card, error.message, 'err');
+            })
+            .finally(function () {
+              card.quantityPending = false;
+              renderGrid();
+            });
         }
 
         function note(card, text, kind) {

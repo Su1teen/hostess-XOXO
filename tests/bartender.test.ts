@@ -142,6 +142,7 @@ async function buildHarness(): Promise<Harness> {
     applyPrice: vi.fn(async () => ({ changed: true, product: { id: 'p1' } })),
     incrementSales: vi.fn(async () => ({ salesQuantity: 3, quantity: 3, priceAtSale: 990, discountPercentAtSale: 31.7, roundEndsAt: '2026-08-22T22:15:00.000Z' })),
     decrementSales: vi.fn(async () => ({ salesQuantity: 1, quantity: 1, priceAtSale: 990, discountPercentAtSale: 31.7, roundEndsAt: '2026-08-22T22:15:00.000Z' })),
+    setSalesQuantity: vi.fn(async (_productId: string, quantity: number) => ({ productId: 'p1', roundId: 'r1', quantity, roundEndsAt: '2026-08-22T22:15:00.000Z' })),
   };
   app.decorate('services', {
     bartender,
@@ -353,6 +354,43 @@ describe('bartender API', () => {
     await app.close();
   });
 
+  it('PUT quantity устанавливает абсолютное количество и требует диапазон 0..9999', async () => {
+    const { app, bartender } = await buildHarness();
+    const token = await loginToken(app);
+    const url = '/api/v1/bartender/exchange/products/00000000-0000-4000-8000-000000000000/sales/quantity';
+
+    const valid = await app.inject({
+      method: 'PUT',
+      url,
+      headers: { 'x-bartender-token': token },
+      payload: { quantity: 5 },
+    });
+    expect(valid.statusCode).toBe(200);
+    expect(valid.json()).toEqual(expect.objectContaining({ productId: 'p1', roundId: 'r1', quantity: 5 }));
+    expect(bartender.setSalesQuantity).toHaveBeenCalledWith(
+      '00000000-0000-4000-8000-000000000000',
+      5,
+      expect.anything(),
+    );
+
+    const invalid = await app.inject({
+      method: 'PUT',
+      url,
+      headers: { 'x-bartender-token': token },
+      payload: { quantity: -1 },
+    });
+    expect(invalid.statusCode).toBe(400);
+
+    const tooLarge = await app.inject({
+      method: 'PUT',
+      url,
+      headers: { 'x-bartender-token': token },
+      payload: { quantity: 10000 },
+    });
+    expect(tooLarge.statusCode).toBe(400);
+    await app.close();
+  });
+
   it('sale decrement требует quantity и не принимает discountPercent', async () => {
     const { app } = await buildHarness();
     const token = await loginToken(app);
@@ -401,5 +439,12 @@ describe('страница /admin', () => {
     expect(ADMIN_PAGE_HTML).toContain('Продано +1');
     expect(ADMIN_PAGE_HTML).toContain('sales/increment');
     expect(ADMIN_PAGE_HTML).not.toContain('selectedDiscountPercent');
+  });
+
+  it('округляет скидку только для отображения и поддерживает абсолютное количество', () => {
+    expect(ADMIN_PAGE_HTML).toContain('Math.round(Number(value))');
+    expect(ADMIN_PAGE_HTML).toContain("'/exchange/products/' + product.id + '/sales/quantity'");
+    expect(ADMIN_PAGE_HTML).toContain("quantity.min = '0'");
+    expect(ADMIN_PAGE_HTML).toContain("quantity.max = '9999'");
   });
 });

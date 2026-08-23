@@ -201,6 +201,69 @@ export class BartenderService {
     return this.changeSales(productId, quantity, -1, actor);
   }
 
+  async setSalesQuantity(productId: string, quantity: number, actor: BartenderActor = {}) {
+    if (!Number.isSafeInteger(quantity) || quantity < 0 || quantity > 9999) {
+      throw validationError('quantity должен быть целым числом от 0 до 9999');
+    }
+    const round = await this.exchange.getActiveRound();
+    if (!round) throw notFound('Активный раунд не найден', 'ROUND_NOT_FOUND');
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const currentRound = await tx.priceRound.findUnique({ where: { id: round.id } });
+      if (!currentRound) throw notFound('Раунд не найден', 'ROUND_NOT_FOUND');
+      if (currentRound.status !== 'PUBLISHED' || currentRound.endsAt <= new Date()) {
+        throw conflict('Закрытый раунд нельзя изменять');
+      }
+      const product = await tx.exchangeProduct.findFirst({
+        where: { id: productId, isActive: true },
+      });
+      if (!product) throw validationError('Товар не является активной биржевой позицией');
+
+      const discount = calculateDiscountPercent(
+        product.originalPrice.toString(),
+        product.currentPrice.toString(),
+      );
+      const snapshot = {
+        priceAtSale: product.currentPrice,
+        selectedDiscountPercentAtSale: product.currentDiscountPercent,
+        actualDiscountPercentAtSale: discount.toFixed(4),
+      };
+      const sale = await tx.exchangeSale.upsert({
+        where: {
+          roundId_exchangeProductId: { roundId: round.id, exchangeProductId: product.id },
+        },
+        update: { quantity, ...snapshot },
+        create: {
+          roundId: round.id,
+          exchangeProductId: product.id,
+          quantity,
+          source: 'MANUAL_PANEL',
+          ...snapshot,
+        },
+      });
+      return { sale, product };
+    });
+
+    await this.audit.log({
+      action: 'BARTENDER_SALE_RECORDED',
+      actorType: 'ADMIN',
+      actorId: 'bartender',
+      entityType: 'ExchangeSale',
+      entityId: result.sale.id,
+      requestId: actor.requestId ?? null,
+      ipAddress: actor.ipAddress ?? null,
+      summary: `Бармен установил ${quantity} продаж(и) «${result.product.name}»`,
+      metadata: { roundId: round.id, salesQuantity: quantity, absolute: true },
+    });
+
+    return {
+      productId,
+      roundId: round.id,
+      quantity: result.sale.quantity,
+      roundEndsAt: round.endsAt.toISOString(),
+    };
+  }
+
   /**
    * Продажи пишутся только в активный текущий раунд и НЕ меняют цену сразу:
    * спрос влияет на цену следующего раунда.
