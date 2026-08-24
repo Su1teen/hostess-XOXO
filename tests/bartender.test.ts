@@ -371,7 +371,8 @@ describe('страница /admin', () => {
 
   it('не показывает бармену ручной выбор скидки', () => {
     expect(ADMIN_PAGE_HTML).not.toContain('Рассчитать');
-    expect(ADMIN_PAGE_HTML).not.toContain('Применить');
+    expect(ADMIN_PAGE_HTML).not.toContain('apply-price');
+    expect(ADMIN_PAGE_HTML).not.toContain('price-preview');
     expect(ADMIN_PAGE_HTML).not.toContain('bt-disc');
     expect(ADMIN_PAGE_HTML).not.toContain('Уровень');
     expect(ADMIN_PAGE_HTML).not.toContain('Минимальная цена');
@@ -392,12 +393,12 @@ describe('страница /admin', () => {
     expect(ADMIN_PAGE_HTML).toContain("quantity.max = '9999'");
   });
 
-  it('имеет step-контрол и мобильную responsive-разметку', () => {
-    expect(ADMIN_PAGE_HTML).toContain('Шаг:');
+  it('имеет один quantity control и мобильную responsive-разметку', () => {
+    expect(ADMIN_PAGE_HTML).not.toContain('Шаг:');
     expect(ADMIN_PAGE_HTML).not.toContain('Изменить на:');
-    expect(ADMIN_PAGE_HTML).not.toContain('var decrease =');
-    expect(ADMIN_PAGE_HTML).not.toContain('var increase =');
+    expect(ADMIN_PAGE_HTML).not.toContain('bt-delta');
     expect(ADMIN_PAGE_HTML).toContain("'/exchange/products/' + product.id + '/sales/' + endpoint");
+    expect(ADMIN_PAGE_HTML).toContain('bt-apply-quantity');
     expect(ADMIN_PAGE_HTML).toContain('@media (max-width: 700px)');
     expect(ADMIN_PAGE_HTML).toContain('min-height: 44px');
   });

@@ -38,10 +38,15 @@ export function normalizePriceLevelPercent(value: unknown): PriceLevelPercent {
   return value as PriceLevelPercent;
 }
 
-export function nearestPriceLevelPercent(originalPrice: MoneyInput, currentPrice: MoneyInput): PriceLevelPercent {
-  const original = toDecimal(originalPrice);
+export function getPriceLevelPercent(request: {
+  originalPrice: MoneyInput;
+  currentPrice: MoneyInput;
+  minPrice?: MoneyInput;
+  maxPrice?: MoneyInput;
+}): PriceLevelPercent {
+  const original = toDecimal(request.originalPrice);
   if (original.isZero()) return 0;
-  const actual = toDecimal(currentPrice).minus(original).div(original).mul(100);
+  const actual = toDecimal(request.currentPrice).minus(original).div(original).mul(100);
   return PRICE_LEVELS.reduce((nearest, level) => {
     const distance = actual.minus(level).abs();
     const nearestDistance = actual.minus(nearest).abs();

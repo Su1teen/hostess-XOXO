@@ -190,10 +190,11 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
       .bt-prices .bt-now b { font-size: 22px; color: #58a6ff; }
       .bt-sales { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
       .bt-sales button { margin: 0; min-width: 44px; min-height: 44px; padding: 8px 14px; font-size: 14px; background: #21262d; border: 1px solid var(--border); cursor: pointer; }
+      .bt-sales button.bt-add-one { background: #238636; border-color: #2ea043; color: #fff; }
+      .bt-sales button.bt-apply-quantity { background: #30363d; border-color: #8b949e; color: #fff; }
       .bt-sales button:disabled { opacity: 0.6; cursor: wait; }
       .bt-sales input { width: 72px; min-height: 44px; margin: 0; padding: 8px 6px; text-align: center; font-size: 15px; }
-      .bt-sales .bt-total-label, .bt-sales .bt-delta-label { flex-basis: 100%; font-size: 12px; color: var(--muted); }
-      .bt-sales .bt-delta-input { width: 72px; }
+      .bt-sales .bt-total-label { flex-basis: 100%; font-size: 12px; color: var(--muted); }
       .bt-state { margin-top: 6px; font-size: 12px; color: var(--muted); }
       .bt-state.err { color: var(--err); }
       .bt-state.ok { color: var(--ok); }
@@ -207,9 +208,8 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
       }
       @media (max-width: 360px) {
         .bt-sales { gap: 4px; }
-        .bt-sales .bt-delta-label { margin-top: 2px; }
-        .bt-sales .bt-delta-input { flex: 1; min-width: 64px; }
         .bt-sales button { padding-left: 10px; padding-right: 10px; }
+        .bt-sales .bt-apply-quantity { flex-basis: 100%; }
       }
     </style>
   </head>
@@ -1074,10 +1074,8 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
             state.cards[id] = {
               confirmedQuantity: 0,
               quantityDraft: '0',
-              deltaDraft: '1',
               quantityEditing: false,
               updatePending: false,
-              deltaConfirmed: '1',
               note: '',
               kind: '',
             };
@@ -1148,8 +1146,9 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           var minus = document.createElement('button');
           minus.type = 'button';
           minus.textContent = '−';
-          minus.setAttribute('aria-label', 'Уменьшить количество продаж');
+          minus.setAttribute('aria-label', 'Уменьшить количество продаж на 1');
           minus.disabled = card.updatePending;
+          var applyButton;
           var quantity = document.createElement('input');
           quantity.type = 'number';
           quantity.min = '0';
@@ -1162,10 +1161,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           quantity.addEventListener('input', function () {
             card.quantityEditing = true;
             card.quantityDraft = quantity.value;
-          });
-          quantity.addEventListener('change', function () { saveQuantity(product, card, quantity.value); });
-          quantity.addEventListener('blur', function () {
-            if (card.quantityEditing) { saveQuantity(product, card, quantity.value); }
+            applyButton.disabled = card.updatePending || !card.quantityEditing;
           });
           quantity.addEventListener('keydown', function (event) {
             if (event.key === 'Enter') {
@@ -1176,49 +1172,17 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           var plus = document.createElement('button');
           plus.type = 'button';
           plus.textContent = '+';
-          plus.setAttribute('aria-label', 'Увеличить количество продаж');
+          plus.className = 'bt-add-one';
+          plus.setAttribute('aria-label', 'Увеличить количество продаж на 1');
           plus.disabled = card.updatePending;
-          var delta = document.createElement('input');
-          delta.type = 'number';
-          delta.min = '1';
-          delta.max = '9999';
-          delta.step = '1';
-          delta.inputMode = 'numeric';
-          delta.className = 'bt-delta-input';
-          delta.setAttribute('aria-label', 'Количество для изменения');
-          var deltaLabel = document.createElement('span');
-          deltaLabel.className = 'bt-delta-label';
-          deltaLabel.textContent = 'Шаг:';
-          delta.value = card.deltaDraft;
-          delta.disabled = card.updatePending;
-          function deltaValue() {
-            var value = Number(delta.value);
-            if (!Number.isSafeInteger(value) || value < 1 || value > 9999) {
-              card.deltaDraft = card.deltaConfirmed;
-              note(card, 'Изменение должно быть целым числом от 1 до 9999.', 'err');
-              return null;
-            }
-            card.deltaDraft = String(value);
-            card.deltaConfirmed = String(value);
-            return value;
-          }
-          delta.addEventListener('input', function () {
-            card.deltaDraft = delta.value;
-          });
-          delta.addEventListener('change', function () {
-            var value = deltaValue();
-            if (value !== null) { delta.value = String(value); }
-          });
           function changeByDelta(direction) {
-            var value = deltaValue();
-            if (value === null) { return; }
             if (card.updatePending) { return; }
             card.updatePending = true;
-            delta.disabled = true;
             minus.disabled = true;
             plus.disabled = true;
+            applyButton.disabled = true;
             var endpoint = direction > 0 ? 'increment' : 'decrement';
-            api('POST', '/exchange/products/' + product.id + '/sales/' + endpoint, { quantity: value })
+            api('POST', '/exchange/products/' + product.id + '/sales/' + endpoint, { quantity: 1 })
               .then(function (result) {
                 product.salesQuantity = result.quantity || result.salesQuantity || 0;
                 card.confirmedQuantity = product.salesQuantity;
@@ -1237,11 +1201,19 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           }
           minus.addEventListener('click', function () { changeByDelta(-1); });
           plus.addEventListener('click', function () { changeByDelta(1); });
+          applyButton = document.createElement('button');
+          applyButton.type = 'button';
+          applyButton.className = 'bt-apply-quantity';
+          applyButton.textContent = 'Применить';
+          applyButton.setAttribute('aria-label', 'Сохранить итоговое количество продаж');
+          applyButton.disabled = card.updatePending || !card.quantityEditing;
+          applyButton.addEventListener('click', function () {
+            saveQuantity(product, card, quantity.value);
+          });
           saleSecondary.appendChild(minus);
           saleSecondary.appendChild(quantity);
           saleSecondary.appendChild(plus);
-          saleSecondary.appendChild(deltaLabel);
-          saleSecondary.appendChild(delta);
+          saleSecondary.appendChild(applyQuantity);
           node.appendChild(saleSecondary);
 
           var stateLine = document.createElement('div');

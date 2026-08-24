@@ -5,6 +5,7 @@ import {
   calculateNextPrice,
   calculatePriceFromLevel,
   calculatePriceLevelDelta,
+  getPriceLevelPercent,
   normalizePriceLevelPercent,
   PRICE_LEVELS,
 } from '../src/services/price-engine.service.js';
@@ -35,6 +36,15 @@ describe('дискретные уровни цены', () => {
     for (const level of [-35, 5, 15, 80, 10.5]) {
       expect(() => calculatePriceFromLevel({ originalPrice: 1450, minPrice: 990, maxPrice: 2200, priceStep: 50, priceLevelPercent: level })).toThrow(AppError);
     }
+  });
+
+  it('определяет знак и ближайший уровень только относительно originalPrice', () => {
+    expect(getPriceLevelPercent({ originalPrice: 2500, currentPrice: 1990, minPrice: 1990, maxPrice: 4000 })).toBe(-20);
+    expect(getPriceLevelPercent({ originalPrice: 3500, currentPrice: 2490, minPrice: 2490, maxPrice: 5000 })).toBe(-30);
+    expect(getPriceLevelPercent({ originalPrice: 3200, currentPrice: 2190, minPrice: 2190, maxPrice: 5000 })).toBe(-30);
+    expect(getPriceLevelPercent({ originalPrice: 2990, currentPrice: 2590, minPrice: 2000, maxPrice: 5000 })).toBe(-10);
+    expect(getPriceLevelPercent({ originalPrice: 2500, currentPrice: 2750, minPrice: 1000, maxPrice: 4000 })).toBe(10);
+    expect(getPriceLevelPercent({ originalPrice: 2500, currentPrice: 2500, minPrice: 1000, maxPrice: 4000 })).toBe(0);
   });
 
   it('использует minPrice как hard floor и maxPrice как ceiling', () => {
