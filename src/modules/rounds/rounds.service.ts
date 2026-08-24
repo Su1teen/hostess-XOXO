@@ -14,7 +14,8 @@ import type { AuditService } from '../../services/audit.service.js';
 import { calculateDiscountPercent } from '../../services/discount.service.js';
 import {
   calculateExchangeDemandScore,
-  calculateNextPrice,
+  calculatePriceFromLevel,
+  calculatePriceLevelDelta,
 } from '../../services/price-engine.service.js';
 
 export interface DemandOverride {
@@ -130,43 +131,39 @@ export class RoundsService {
       const override = overrides.get(product.id);
       const salesQuantity = override?.salesQuantity ?? salesByProduct.get(product.id) ?? 0;
       const demandScore = calculateExchangeDemandScore(salesQuantity, averageSales);
-      const calculation = calculateNextPrice({
-        productId: product.id,
-        productName: product.name,
-        currentPrice: product.currentPrice,
-        basePrice: product.startPrice,
-        minPrice: product.minPrice,
-        maxPrice: product.maxPrice,
-        priceStep: product.priceStep,
-        maxChangePercent: 10,
-        demandScore: override?.demandScore ?? demandScore,
-        salesQuantity,
-        k: 0.1,
-      });
+      const levelDelta = calculatePriceLevelDelta(salesQuantity, averageSales);
+      const currentLevel = product.priceLevelPercent;
+      const nextLevel = clampPriceLevel(currentLevel + levelDelta);
+      const nextPrice = levelDelta === 0
+        ? product.currentPrice
+        : calculatePriceFromLevel({
+            originalPrice: product.originalPrice,
+            minPrice: product.minPrice,
+            maxPrice: product.maxPrice,
+            priceStep: product.priceStep,
+            levelPercent: nextLevel,
+          });
+      const discount = calculateDiscountPercent(product.originalPrice.toString(), nextPrice);
+      const roundChange = changePercent(product.currentPrice, nextPrice);
 
       return {
         exchangeProductId: product.id,
         originalPrice: product.originalPrice.toString(),
-        selectedDiscountPercent: calculateDiscountPercent(
-          product.originalPrice.toString(),
-          calculation.calculatedPrice,
-        ).toString(),
-        actualDiscountPercent: calculateDiscountPercent(
-          product.originalPrice.toString(),
-          calculation.calculatedPrice,
-        ).toString(),
-        price: calculation.calculatedPrice.toString(),
-        soldQuantity: calculation.salesQuantity.toString(),
-        previousPrice: calculation.previousPrice.toString(),
-        calculatedPrice: calculation.calculatedPrice.toString(),
-        minPrice: calculation.minPrice.toString(),
-        maxPrice: calculation.maxPrice.toString(),
-        priceStep: calculation.priceStep.toString(),
-        salesQuantity: calculation.salesQuantity.toString(),
-        demandScore: calculation.demandScore.toString(),
-        changePercent: calculation.changePercent.toString(),
-        calculationInput: calculation.input as unknown as Prisma.InputJsonValue,
-        calculationResult: calculation.result as unknown as Prisma.InputJsonValue,
+        priceLevelPercent: nextLevel,
+        discountPercent: discount.toString(),
+        actualDiscountPercent: discount.toString(),
+        price: nextPrice.toString(),
+        soldQuantity: String(salesQuantity),
+        previousPrice: product.currentPrice.toString(),
+        calculatedPrice: nextPrice.toString(),
+        minPrice: product.minPrice.toString(),
+        maxPrice: product.maxPrice.toString(),
+        priceStep: product.priceStep.toString(),
+        salesQuantity: String(salesQuantity),
+        demandScore: (override?.demandScore ?? demandScore).toString(),
+        changePercent: roundChange.toString(),
+        calculationInput: { algorithm: 'discrete-price-levels-v1', currentLevel, levelDelta, salesQuantity, averageSales } as Prisma.InputJsonValue,
+        calculationResult: { nextLevel, nextPrice: nextPrice.toString(), minPriceHardFloor: true } as Prisma.InputJsonValue,
         status: 'SIMULATED' as RoundStatus,
       };
     });
@@ -240,15 +237,71 @@ export class RoundsService {
       const average = products.reduce((sum, product) => sum + (quantities.get(product.id) ?? 0), 0) / Math.max(products.length, 1);
       const rows = products.map((product) => {
         const quantity = quantities.get(product.id) ?? 0;
-        const demandScore = quantity < 2 ? 0 : Math.max(0, Math.min(1, (quantity - average) / Math.max(average, 1)));
-        const calculation = calculateNextPrice({ productId: product.id, productName: product.name, currentPrice: product.currentPrice, basePrice: product.originalPrice || product.startPrice, minPrice: product.minPrice, maxPrice: product.maxPrice, priceStep: product.priceStep, maxChangePercent: 10, demandScore, salesQuantity: quantity, k: 0.1 });
-        const nextPrice = quantity === 0 ? product.currentPrice : calculation.calculatedPrice;
-        const discount = product.originalPrice.eq(0) ? 0 : product.originalPrice.minus(nextPrice).div(product.originalPrice).mul(100).toDecimalPlaces(2);
-        return { product, quantity, nextPrice, discount, calculation };
+        const demandScore = calculateExchangeDemandScore(quantity, average);
+        const levelDelta = calculatePriceLevelDelta(quantity, average);
+        const nextLevel = quantity < 2 ? product.priceLevelPercent : clampPriceLevel(product.priceLevelPercent + levelDelta);
+        const nextPrice = quantity < 2
+          ? product.currentPrice
+          : calculatePriceFromLevel({
+              originalPrice: product.originalPrice,
+              minPrice: product.minPrice,
+              maxPrice: product.maxPrice,
+              priceStep: product.priceStep,
+              levelPercent: nextLevel,
+            });
+        const discount = calculateDiscountPercent(product.originalPrice.toString(), nextPrice);
+        return { product, quantity, nextPrice, discount, demandScore, nextLevel, levelDelta };
       });
       await tx.priceRound.update({ where: { id: active.id }, data: { status: 'CLOSED' } });
-      const created = await tx.priceRound.create({ data: { organizationId: organization.id, roundKey: nextWindow.roundKey, startsAt: nextWindow.startsAt, endsAt: nextWindow.endsAt, timezone: this.env.APP_TIMEZONE, status: 'PUBLISHED', algorithmVersion: PRICE_ALGORITHM_VERSION, triggerSource: 'CRON', publishedAt: now, prices: { create: rows.map(({ product, quantity, nextPrice, discount, calculation }) => ({ exchangeProductId: product.id, price: nextPrice, previousPrice: product.currentPrice, calculatedPrice: nextPrice, publishedPrice: nextPrice, minPrice: product.minPrice, maxPrice: product.maxPrice, priceStep: product.priceStep, selectedDiscountPercent: discount, actualDiscountPercent: discount, soldQuantity: quantity, salesQuantity: quantity, demandScore: calculation.demandScore, changePercent: changePercent(product.currentPrice, nextPrice), calculationInput: calculation.input as unknown as Prisma.InputJsonValue, calculationResult: calculation.result as unknown as Prisma.InputJsonValue, status: 'PUBLISHED' as RoundStatus })) } }, include: ROUND_INCLUDE });
-      for (const row of rows) await tx.exchangeProduct.update({ where: { id: row.product.id }, data: { currentPrice: row.nextPrice, currentDiscountPercent: row.discount, actualDiscountPercent: row.discount } });
+      const created = await tx.priceRound.create({
+        data: {
+          organizationId: organization.id,
+          roundKey: nextWindow.roundKey,
+          startsAt: nextWindow.startsAt,
+          endsAt: nextWindow.endsAt,
+          timezone: this.env.APP_TIMEZONE,
+          status: 'PUBLISHED',
+          algorithmVersion: PRICE_ALGORITHM_VERSION,
+          triggerSource: 'CRON',
+          publishedAt: now,
+          prices: {
+            create: rows.map(({ product, quantity, nextPrice, discount, demandScore, nextLevel, levelDelta }) => ({
+              exchangeProductId: product.id,
+              price: nextPrice,
+              previousPrice: product.currentPrice,
+              calculatedPrice: nextPrice,
+              publishedPrice: nextPrice,
+              minPrice: product.minPrice,
+              maxPrice: product.maxPrice,
+              priceStep: product.priceStep,
+              originalPrice: product.originalPrice,
+              priceLevelPercent: nextLevel,
+              discountPercent: discount,
+              selectedDiscountPercent: discount,
+              actualDiscountPercent: discount,
+              soldQuantity: quantity,
+              salesQuantity: quantity,
+              demandScore,
+              changePercent: changePercent(product.currentPrice, nextPrice),
+              calculationInput: { algorithm: 'discrete-price-levels-v1', currentLevel: product.priceLevelPercent, levelDelta, salesQuantity: quantity, averageSales: average } as Prisma.InputJsonValue,
+              calculationResult: { nextLevel, nextPrice: nextPrice.toString(), minPriceHardFloor: true } as Prisma.InputJsonValue,
+              status: 'PUBLISHED' as RoundStatus,
+            })),
+          },
+        },
+        include: ROUND_INCLUDE,
+      });
+      for (const row of rows) {
+        await tx.exchangeProduct.update({
+          where: { id: row.product.id },
+          data: {
+            currentPrice: row.nextPrice,
+            priceLevelPercent: row.nextLevel,
+            currentDiscountPercent: row.discount,
+            actualDiscountPercent: row.discount,
+          },
+        });
+      }
       return created;
     });
   }
@@ -468,6 +521,10 @@ export class RoundsService {
       })),
     };
   }
+}
+
+function clampPriceLevel(level: number): number {
+  return Math.max(-30, Math.min(70, Math.round(level / 10) * 10));
 }
 
 function isUniqueViolation(error: unknown): boolean {

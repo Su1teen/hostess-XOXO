@@ -8,6 +8,7 @@ import {
 import { roundToStep } from '../../lib/money.js';
 import { getCurrentRound } from '../../lib/time.js';
 import { calculateDiscountPercent } from '../../services/discount.service.js';
+import { nearestPriceLevelPercent } from '../../services/price-engine.service.js';
 
 const PAUSED_SETTING = 'exchange.paused';
 const ROUND_INCLUDE = { prices: { include: { exchangeProduct: true } } } as const;
@@ -48,6 +49,7 @@ export class ExchangeService {
           startPrice: product.minPrice,
           currentPrice: product.minPrice,
           currentDiscountPercent: initialDiscount.toFixed(4),
+          priceLevelPercent: nearestPriceLevelPercent(product.originalPrice, product.minPrice),
           actualDiscountPercent: initialDiscount.toFixed(4),
           minPrice: product.minPrice,
           maxPrice: maxPrice.toFixed(2),
@@ -96,6 +98,11 @@ export class ExchangeService {
               calculatedPrice: product.currentPrice,
               publishedPrice: product.currentPrice,
               originalPrice: product.originalPrice,
+              priceLevelPercent: nearestPriceLevelPercent(product.originalPrice, product.currentPrice),
+              discountPercent: calculateDiscountPercent(
+                product.originalPrice.toString(),
+                product.currentPrice.toString(),
+              ),
               actualDiscountPercent: calculateDiscountPercent(
                 product.originalPrice.toString(),
                 product.currentPrice.toString(),
@@ -180,6 +187,8 @@ export class ExchangeService {
               calculatedPrice: product.currentPrice,
               publishedPrice: product.currentPrice,
               originalPrice: product.originalPrice,
+              priceLevelPercent: product.priceLevelPercent,
+              discountPercent: product.currentDiscountPercent,
               actualDiscountPercent: product.currentDiscountPercent,
               minPrice: product.minPrice,
               maxPrice: product.maxPrice,

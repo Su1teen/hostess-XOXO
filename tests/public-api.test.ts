@@ -24,6 +24,8 @@ describe('public exchange API', () => {
             currency: 'KZT',
             originalPrice: 3200,
             currentPrice: 2190,
+            minPrice: 2190,
+            priceLevelPercent: -30,
             currentDiscountPercent: 31.5625,
             isActive: true,
           },
@@ -37,7 +39,8 @@ describe('public exchange API', () => {
     const products = response.json().products;
     expect(products).toHaveLength(1);
     expect(products[0]).toEqual(expect.objectContaining({ id: 'exchange', name: 'Gin Tonic' }));
-    expect(products[0].discountPercent).toBe(31.5625);
+    expect(products[0].discountPercent).toBe(32);
+    expect(products[0].priceLevelPercent).toBe(-30);
     expect(products[0].currentDiscountPercent).toBeUndefined();
     await app.close();
   });

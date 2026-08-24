@@ -188,15 +188,6 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
       .bt-prices div { font-size: 12px; color: var(--muted); }
       .bt-prices b { display: block; font-size: 15px; color: var(--text); font-weight: 600; }
       .bt-prices .bt-now b { font-size: 22px; color: #58a6ff; }
-      .bt-disc { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-bottom: 8px; }
-      .bt-disc button {
-        margin: 0;
-        padding: 9px 0;
-        font-size: 13px;
-        background: #1b212c;
-        border: 1px solid var(--border);
-      }
-      .bt-disc button[aria-pressed='true'] { background: #1f6feb; border-color: #1f6feb; }
       .bt-sale-primary { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
       .bt-sale-primary .bt-do-sale {
         flex: 1; padding: 14px 12px; font-size: 17px; font-weight: 600;
@@ -211,11 +202,6 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
       .bt-sales input { width: 72px; min-height: 44px; margin: 0; padding: 8px 6px; text-align: center; font-size: 15px; }
       .bt-sales .bt-total-label, .bt-sales .bt-delta-label { flex-basis: 100%; font-size: 12px; color: var(--muted); }
       .bt-sales .bt-delta-input { width: 72px; }
-      .bt-manual-header { font-size: 12px; margin: 4px 0 6px; text-transform: uppercase; letter-spacing: 0.04em; }
-      .bt-apply { display: flex; gap: 6px; margin-bottom: 6px; }
-      .bt-apply button { margin: 0; min-height: 44px; flex: 1; padding: 10px 8px; font-size: 14px; }
-      .bt-apply button.bt-do-apply { background: #238636; }
-      .bt-preview { font-size: 13px; min-height: 20px; margin-bottom: 8px; }
       .bt-state { margin-top: 6px; font-size: 12px; color: var(--muted); }
       .bt-state.err { color: var(--err); }
       .bt-state.ok { color: var(--ok); }
@@ -228,7 +214,6 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         .bt-card { min-width: 0; }
       }
       @media (max-width: 520px) {
-        .bt-disc { grid-template-columns: repeat(4, 1fr); }
         .bt-sale-primary { align-items: stretch; }
         .bt-sale-primary .bt-count { align-self: center; }
       }
@@ -237,8 +222,6 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         .bt-sales .bt-delta-label { margin-top: 2px; }
         .bt-sales .bt-delta-input { flex: 1; min-width: 64px; }
         .bt-sales button { padding-left: 10px; padding-right: 10px; }
-        .bt-apply { flex-wrap: wrap; }
-        .bt-apply button { flex-basis: calc(50% - 3px); }
       }
     </style>
   </head>
@@ -902,8 +885,6 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         var TOKEN_KEY = 'barExchangeBartenderToken';
         var EXPIRES_KEY = 'barExchangeBartenderExpires';
         var BASE_FILTERS = ['Все', 'Крепкий алкоголь', 'Бутылочное пиво', 'Коктейли'];
-        var DISCOUNTS = [];
-        for (var d = 0; d < 100; d += 5) { DISCOUNTS.push(d); }
 
         var el = function (id) { return document.getElementById(id); };
         var mode = el('bartenderMode');
@@ -1103,8 +1084,6 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         function cardState(id) {
           if (!state.cards[id]) {
             state.cards[id] = {
-              selected: null,
-              preview: null,
               confirmedQuantity: 0,
               quantityDraft: '0',
               deltaDraft: '1',
@@ -1121,8 +1100,13 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         function discountLabel(value) {
           var rounded = Math.round(Number(value));
           return rounded < 0
-            ? 'Наценка: ' + Math.abs(rounded) + '%'
+            ? 'Наценка: +' + Math.abs(rounded) + '%'
             : 'Скидка: ' + rounded + '%';
+        }
+
+        function levelLabel(value) {
+          var level = Number(value);
+          return (level > 0 ? '+' : '') + Math.round(level) + '%';
         }
 
         function price(value) { return money.format(Number(value)) + ' ₸'; }
@@ -1165,6 +1149,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           prices.appendChild(priceCell('Меню', price(product.originalPrice), ''));
           prices.appendChild(priceCell('Минимум', price(product.minPrice), ''));
           prices.appendChild(priceCell('Сейчас', price(product.currentPrice), 'bt-now'));
+          prices.appendChild(priceCell('Уровень', levelLabel(product.priceLevelPercent), ''));
           prices.appendChild(priceCell('Скидка', discountLabel(product.currentDiscountPercent), ''));
           if (Number(product.currentPrice) === Number(product.minPrice)) {
             prices.appendChild(priceCell('Статус', 'Минимальная цена', 'status warn'));
@@ -1339,84 +1324,9 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           saleSecondary.appendChild(increase);
           node.appendChild(saleSecondary);
 
-          var manualHeader = document.createElement('div');
-          manualHeader.className = 'bt-manual-header muted';
-          manualHeader.textContent = 'Ручная коррекция цены (опционально)';
-          node.appendChild(manualHeader);
-
-          var discounts = document.createElement('div');
-          discounts.className = 'bt-disc';
-          DISCOUNTS.forEach(function (percent) {
-            var button = document.createElement('button');
-            button.type = 'button';
-            button.textContent = percent + '%';
-            button.setAttribute('aria-pressed', String(card.selected === percent));
-            button.addEventListener('click', function () {
-              card.selected = percent;
-              card.preview = null;
-              card.note = '';
-              card.kind = '';
-              renderGrid();
-            });
-            discounts.appendChild(button);
-          });
-          node.appendChild(discounts);
-
-          var preview = document.createElement('div');
-          preview.className = 'bt-preview muted';
-          if (card.preview) {
-            preview.textContent = 'Итог: ' + price(card.preview.finalPrice) +
-              ' · ' + discountLabel(card.preview.actualDiscountPercent) +
-              (card.preview.minPriceApplied ? ' · Цена ограничена минимальной ценой' : '');
-            preview.className = 'bt-preview ' + (card.preview.minPriceApplied ? 'status warn' : 'status ok');
-          } else {
-            preview.textContent = card.selected === null
-              ? 'Выберите скидку и нажмите «Рассчитать».'
-              : 'Скидка ' + card.selected + '% выбрана — нажмите «Рассчитать».';
-          }
-          node.appendChild(preview);
-
-          var actions = document.createElement('div');
-          actions.className = 'bt-apply';
-          var calcButton = document.createElement('button');
-          calcButton.type = 'button';
-          calcButton.className = 'secondary';
-          calcButton.textContent = 'Рассчитать';
-          calcButton.disabled = card.selected === null;
-          calcButton.addEventListener('click', function () {
-            api('POST', '/exchange/products/' + product.id + '/price-preview', {
-              discountPercent: card.selected,
-            }).then(function (result) {
-              card.preview = result;
-              card.note = '';
-              card.kind = '';
-              renderGrid();
-            }).catch(function (error) { note(card, error.message, 'err'); });
-          });
-          var applyButton = document.createElement('button');
-          applyButton.type = 'button';
-          applyButton.className = 'bt-do-apply';
-          applyButton.textContent = 'Применить';
-          applyButton.disabled = !card.preview;
-          applyButton.addEventListener('click', function () {
-            api('POST', '/exchange/products/' + product.id + '/apply-price', {
-              discountPercent: card.selected,
-            }).then(function (result) {
-              replaceProduct(result.product);
-              card.preview = null;
-              card.selected = null;
-              note(card, 'Применено ' + time(result.appliedAt) + ' · ' + price(result.product.currentPrice), 'ok');
-            }).catch(function (error) { note(card, error.message, 'err'); });
-          });
-          actions.appendChild(calcButton);
-          actions.appendChild(applyButton);
-          node.appendChild(actions);
-
           var stateLine = document.createElement('div');
           stateLine.className = 'bt-state ' + (card.kind || '');
-          stateLine.textContent = card.note || (product.manualPriceAppliedAt
-            ? 'Последнее применение: ' + time(product.manualPriceAppliedAt)
-            : 'Ручная скидка ещё не применялась.');
+          stateLine.textContent = card.note || 'Цена фиксирована до конца текущего раунда.';
           node.appendChild(stateLine);
 
           return node;

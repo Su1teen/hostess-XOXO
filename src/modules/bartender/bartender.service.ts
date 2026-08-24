@@ -3,12 +3,7 @@ import { CURRENCY } from '../../config/constants.js';
 import { conflict, notFound, validationError } from '../../lib/errors.js';
 import { toNumber } from '../../lib/money.js';
 import type { AuditService } from '../../services/audit.service.js';
-import {
-  calculateDiscountPercent,
-  calculateManualDiscount,
-  MANUAL_DISCOUNT_OPTIONS,
-  type ManualDiscountResult,
-} from '../../services/discount.service.js';
+import { calculateDiscountPercent } from '../../services/discount.service.js';
 import {
   EXCHANGE_INTERVAL_MINUTES,
   EXCHANGE_PRODUCTS,
@@ -30,6 +25,7 @@ export interface BartenderProductDto {
   currency: string;
   originalPrice: number;
   currentPrice: number;
+  priceLevelPercent: number;
   minPrice: number;
   maxPrice: number;
   priceStep: number;
@@ -39,26 +35,8 @@ export interface BartenderProductDto {
   updatedAt: string;
 }
 
-export interface BartenderPreviewDto {
-  productId: string;
-  name: string;
-  currency: string;
-  originalPrice: number;
-  currentPrice: number;
-  minPrice: number;
-  maxPrice: number;
-  priceStep: number;
-  selectedDiscountPercent: number;
-  rawPrice: number;
-  roundedPrice: number;
-  finalPrice: number;
-  actualDiscountPercent: number;
-  discountAmount: number;
-  minPriceApplied: boolean;
-}
-
 /**
- * Рабочая логика панели бармена: ручные скидки и продажи текущего раунда.
+ * Рабочая логика панели бармена: просмотр canonical price и продажи текущего раунда.
  * Каталог берётся только из exchange_products, iiko здесь не участвует.
  */
 export class BartenderService {
@@ -67,10 +45,6 @@ export class BartenderService {
     private readonly exchange: ExchangeService,
     private readonly audit: AuditService,
   ) {}
-
-  get discountOptions(): number[] {
-    return MANUAL_DISCOUNT_OPTIONS;
-  }
 
   async listProducts(): Promise<{
     generatedAt: string;
@@ -98,98 +72,6 @@ export class BartenderService {
       products: products.map((product) =>
         toProductDto(product, salesByProduct.get(product.id) ?? 0),
       ),
-    };
-  }
-
-  async preview(productId: string, selectedDiscountPercent: number): Promise<BartenderPreviewDto> {
-    const product = await this.getActiveProduct(productId);
-    const calculation = calculateManualDiscount({
-      originalPrice: product.originalPrice.toString(),
-      minPrice: product.minPrice.toString(),
-      priceStep: product.priceStep.toString(),
-      selectedDiscountPercent,
-    });
-    return toPreviewDto(product, calculation);
-  }
-
-  /**
-   * Применяет ручную скидку. Цена всегда пересчитывается на сервере: значение
-   * из фронтенда игнорируется. Повторное применение того же процента не меняет
-   * состояние (идемпотентно по результату).
-   */
-  async applyPrice(
-    productId: string,
-    selectedDiscountPercent: number,
-    actor: BartenderActor = {},
-  ): Promise<{ preview: BartenderPreviewDto; product: BartenderProductDto; changed: boolean }> {
-    const round = await this.exchange.ensureCurrentRound();
-    const product = await this.getActiveProduct(productId);
-    const calculation = calculateManualDiscount({
-      originalPrice: product.originalPrice.toString(),
-      minPrice: product.minPrice.toString(),
-      priceStep: product.priceStep.toString(),
-      selectedDiscountPercent,
-    });
-
-    const changed =
-      !product.currentPrice.equals(calculation.finalPrice.toFixed(2)) ||
-      !product.currentDiscountPercent.equals(calculation.actualDiscountPercent.toFixed(4));
-
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const saved = await tx.exchangeProduct.update({
-        where: { id: product.id },
-        data: {
-          currentPrice: calculation.finalPrice.toFixed(2),
-          currentDiscountPercent: calculation.actualDiscountPercent.toFixed(4),
-          actualDiscountPercent: calculation.actualDiscountPercent.toFixed(4),
-          manualPriceAppliedAt: new Date(),
-        },
-      });
-      if (round) {
-        const roundPrice = await tx.roundPrice.findFirst({
-          where: { roundId: round.id, exchangeProductId: product.id },
-        });
-        if (roundPrice) {
-          await tx.roundPrice.update({
-            where: { id: roundPrice.id },
-            data: {
-              price: calculation.finalPrice.toFixed(2),
-              publishedPrice: calculation.finalPrice.toFixed(2),
-              calculatedPrice: calculation.finalPrice.toFixed(2),
-              originalPrice: calculation.originalPrice.toFixed(2),
-              selectedDiscountPercent: calculation.selectedDiscountPercent.toFixed(4),
-              actualDiscountPercent: calculation.actualDiscountPercent.toFixed(4),
-            },
-          });
-        }
-      }
-      return saved;
-    });
-
-    await this.audit.log({
-      action: 'BARTENDER_PRICE_APPLIED',
-      actorType: 'ADMIN',
-      actorId: 'bartender',
-      entityType: 'ExchangeProduct',
-      entityId: product.id,
-      requestId: actor.requestId ?? null,
-      ipAddress: actor.ipAddress ?? null,
-      summary: `Бармен применил скидку ${selectedDiscountPercent}% к «${product.name}»`,
-      metadata: {
-        selectedDiscountPercent,
-        actualDiscountPercent: calculation.actualDiscountPercent.toString(),
-        finalPrice: calculation.finalPrice.toString(),
-        previousPrice: product.currentPrice.toString(),
-        minPriceApplied: calculation.minPriceApplied,
-        changed,
-      },
-    });
-
-    const salesQuantity = round ? await this.currentSalesQuantity(round.id, product.id) : 0;
-    return {
-      preview: toPreviewDto(updated, calculation),
-      product: toProductDto(updated, salesQuantity),
-      changed,
     };
   }
 
@@ -225,6 +107,8 @@ export class BartenderService {
       );
       const snapshot = {
         priceAtSale: product.currentPrice,
+        priceLevelPercentAtSale: product.priceLevelPercent,
+        discountPercentAtSale: discount.toFixed(4),
         selectedDiscountPercentAtSale: product.currentDiscountPercent,
         actualDiscountPercentAtSale: discount.toFixed(4),
       };
@@ -303,6 +187,8 @@ export class BartenderService {
       );
       const snapshot = {
         priceAtSale: product.currentPrice,
+        priceLevelPercentAtSale: product.priceLevelPercent,
+        discountPercentAtSale: discount.toFixed(4),
         selectedDiscountPercentAtSale: product.currentDiscountPercent,
         actualDiscountPercentAtSale: discount.toFixed(4),
       };
@@ -341,7 +227,7 @@ export class BartenderService {
       salesQuantity: result.sale.quantity,
       quantity: result.sale.quantity,
       priceAtSale: toNumber(result.sale.priceAtSale.toString()),
-      discountPercentAtSale: toNumber((result.sale.actualDiscountPercentAtSale ?? result.sale.selectedDiscountPercentAtSale ?? 0).toString()),
+      discountPercentAtSale: toNumber((result.sale.discountPercentAtSale ?? result.sale.actualDiscountPercentAtSale ?? result.sale.selectedDiscountPercentAtSale ?? 0).toString()),
       roundEndsAt: round.endsAt.toISOString(),
     };
   }
@@ -416,6 +302,7 @@ function toProductDto(product: ExchangeProduct, salesQuantity: number): Bartende
     currency: product.currency,
     originalPrice: toNumber(product.originalPrice.toString()),
     currentPrice: toNumber(product.currentPrice.toString()),
+    priceLevelPercent: product.priceLevelPercent,
     minPrice: toNumber(product.minPrice.toString()),
     maxPrice: toNumber(product.maxPrice.toString()),
     priceStep: toNumber(product.priceStep.toString()),
@@ -426,25 +313,3 @@ function toProductDto(product: ExchangeProduct, salesQuantity: number): Bartende
   };
 }
 
-function toPreviewDto(
-  product: ExchangeProduct,
-  calculation: ManualDiscountResult,
-): BartenderPreviewDto {
-  return {
-    productId: product.id,
-    name: product.name,
-    currency: product.currency,
-    originalPrice: toNumber(calculation.originalPrice),
-    currentPrice: toNumber(product.currentPrice.toString()),
-    minPrice: toNumber(calculation.minPrice),
-    maxPrice: toNumber(product.maxPrice.toString()),
-    priceStep: toNumber(product.priceStep.toString()),
-    selectedDiscountPercent: calculation.selectedDiscountPercent.toNumber(),
-    rawPrice: toNumber(calculation.rawPrice),
-    roundedPrice: toNumber(calculation.roundedPrice),
-    finalPrice: toNumber(calculation.finalPrice),
-    actualDiscountPercent: Number(calculation.actualDiscountPercent.toFixed(4)),
-    discountAmount: toNumber(calculation.discountAmount),
-    minPriceApplied: calculation.minPriceApplied,
-  };
-}

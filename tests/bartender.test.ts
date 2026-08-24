@@ -126,8 +126,6 @@ interface Harness {
   bartender: {
     listProducts: ReturnType<typeof vi.fn>;
     status: ReturnType<typeof vi.fn>;
-    preview: ReturnType<typeof vi.fn>;
-    applyPrice: ReturnType<typeof vi.fn>;
     incrementSales: ReturnType<typeof vi.fn>;
     decrementSales: ReturnType<typeof vi.fn>;
   };
@@ -138,8 +136,6 @@ async function buildHarness(): Promise<Harness> {
   const bartender = {
     listProducts: vi.fn(async () => ({ products: [], roundId: null })),
     status: vi.fn(async () => ({ running: true })),
-    preview: vi.fn(async () => ({ finalPrice: 1700 })),
-    applyPrice: vi.fn(async () => ({ changed: true, product: { id: 'p1' } })),
     incrementSales: vi.fn(async () => ({ salesQuantity: 3, quantity: 3, priceAtSale: 990, discountPercentAtSale: 31.7, roundEndsAt: '2026-08-22T22:15:00.000Z' })),
     decrementSales: vi.fn(async () => ({ salesQuantity: 1, quantity: 1, priceAtSale: 990, discountPercentAtSale: 31.7, roundEndsAt: '2026-08-22T22:15:00.000Z' })),
     setSalesQuantity: vi.fn(async (_productId: string, quantity: number) => ({ productId: 'p1', roundId: 'r1', quantity, roundEndsAt: '2026-08-22T22:15:00.000Z' })),
@@ -213,62 +209,6 @@ describe('bartender API', () => {
       headers: { 'x-bartender-token': token },
     });
     expect(after.statusCode).toBe(401);
-    await app.close();
-  });
-
-  it('preview валидирует процент и не мутирует данные', async () => {
-    const { app, bartender } = await buildHarness();
-    const token = await loginToken(app);
-    const bad = await app.inject({
-      method: 'POST',
-      url: '/api/v1/bartender/exchange/products/00000000-0000-4000-8000-000000000000/price-preview',
-      headers: { 'x-bartender-token': token },
-      payload: { discountPercent: 120 },
-    });
-    expect(bad.statusCode).toBe(400);
-    expect(bartender.preview).not.toHaveBeenCalled();
-
-    const ok = await app.inject({
-      method: 'POST',
-      url: '/api/v1/bartender/exchange/products/00000000-0000-4000-8000-000000000000/price-preview',
-      headers: { 'x-bartender-token': token },
-      payload: { discountPercent: 15 },
-    });
-    expect(ok.statusCode).toBe(200);
-    expect(bartender.preview).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000000', 15);
-    expect(bartender.applyPrice).not.toHaveBeenCalled();
-    await app.close();
-  });
-
-  it('apply-price игнорирует цену из фронтенда', async () => {
-    const { app, bartender } = await buildHarness();
-    const token = await loginToken(app);
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/v1/bartender/exchange/products/00000000-0000-4000-8000-000000000000/apply-price',
-      headers: { 'x-bartender-token': token },
-      payload: { discountPercent: 20 },
-    });
-    // Цена не принимается от клиента: сервер считает её сам.
-    expect(response.statusCode).toBe(200);
-    expect(bartender.applyPrice).toHaveBeenCalledWith(
-      '00000000-0000-4000-8000-000000000000',
-      20,
-      expect.anything(),
-    );
-
-    const clean = await app.inject({
-      method: 'POST',
-      url: '/api/v1/bartender/exchange/products/00000000-0000-4000-8000-000000000000/apply-price',
-      headers: { 'x-bartender-token': token },
-      payload: { discountPercent: 20 },
-    });
-    expect(clean.statusCode).toBe(200);
-    expect(bartender.applyPrice).toHaveBeenCalledWith(
-      '00000000-0000-4000-8000-000000000000',
-      20,
-      expect.objectContaining({ requestId: expect.any(String) }),
-    );
     await app.close();
   });
 
@@ -429,10 +369,11 @@ describe('страница /admin', () => {
     expect(ADMIN_PAGE_HTML).toContain('/api/v1/admin/diagnostics');
   });
 
-  it('рисует кнопки скидок и парные кнопки расчёта и применения', () => {
-    expect(ADMIN_PAGE_HTML).toContain('Рассчитать');
-    expect(ADMIN_PAGE_HTML).toContain('Применить');
-    expect(ADMIN_PAGE_HTML).toContain('bt-disc');
+  it('не показывает бармену ручной выбор скидки', () => {
+    expect(ADMIN_PAGE_HTML).not.toContain('Рассчитать');
+    expect(ADMIN_PAGE_HTML).not.toContain('Применить');
+    expect(ADMIN_PAGE_HTML).not.toContain('bt-disc');
+    expect(ADMIN_PAGE_HTML).toContain('Уровень');
   });
 
   it('основное действие — Продано +1, не требует скидку', () => {

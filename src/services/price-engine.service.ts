@@ -28,6 +28,41 @@ export function calculateDemandScore(quantity: MoneyInput, average: MoneyInput):
 /** Минимальное количество продаж, при котором спрос считается активным. */
 export const EXCHANGE_MIN_SALES_FOR_DEMAND = 2;
 
+export const PRICE_LEVELS = [-30, -20, -10, 0, 10, 20, 30, 40, 50, 60, 70] as const;
+export type PriceLevelPercent = (typeof PRICE_LEVELS)[number];
+
+export function validatePriceLevelPercent(level: number): asserts level is PriceLevelPercent {
+  if (!Number.isInteger(level) || !PRICE_LEVELS.includes(level as PriceLevelPercent)) {
+    throw validationError('priceLevelPercent должен быть одним из уровней -30..70 с шагом 10');
+  }
+}
+
+export function nearestPriceLevelPercent(originalPrice: MoneyInput, currentPrice: MoneyInput): PriceLevelPercent {
+  const original = toDecimal(originalPrice);
+  if (original.isZero()) return 0;
+  const actual = toDecimal(currentPrice).minus(original).div(original).mul(100);
+  return PRICE_LEVELS.reduce((nearest, level) => {
+    const distance = actual.minus(level).abs();
+    const nearestDistance = actual.minus(nearest).abs();
+    return distance.lt(nearestDistance) ? level : nearest;
+  }, PRICE_LEVELS[0]);
+}
+
+export function calculatePriceFromLevel(request: {
+  originalPrice: MoneyInput;
+  minPrice: MoneyInput;
+  maxPrice: MoneyInput;
+  priceStep: MoneyInput;
+  levelPercent: number;
+}): Decimal {
+  validatePriceLevelPercent(request.levelPercent);
+  const original = toMoney(request.originalPrice);
+  const minPrice = toMoney(request.minPrice);
+  const maxPrice = toMoney(request.maxPrice);
+  const rawPrice = original.mul(new Decimal(1).plus(new Decimal(request.levelPercent).div(100)));
+  return toMoney(clamp(roundToStep(rawPrice, request.priceStep), minPrice, maxPrice));
+}
+
 /**
  * Спрос биржи за раунд.
  *
@@ -41,6 +76,16 @@ export function calculateExchangeDemandScore(quantity: MoneyInput, average: Mone
   if (sales.lt(EXCHANGE_MIN_SALES_FOR_DEMAND)) return new Decimal(0);
   const avg = toDecimal(average);
   return sales.minus(avg).div(Decimal.max(avg, 1)).clamp(0, 1);
+}
+
+export function calculatePriceLevelDelta(quantity: MoneyInput, average: MoneyInput): 0 | 10 | 20 | 30 {
+  const sales = toDecimal(quantity);
+  if (sales.lt(EXCHANGE_MIN_SALES_FOR_DEMAND)) return 0;
+  const ratio = sales.div(Decimal.max(toDecimal(average), 1));
+  if (ratio.lt(1)) return 0;
+  if (ratio.lt(1.5)) return 10;
+  if (ratio.lt(2)) return 20;
+  return 30;
 }
 
 export interface PriceCalculationRequest {

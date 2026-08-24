@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { AppError } from '../src/lib/errors.js';
-import { calculateDemandScore, calculateNextPrice } from '../src/services/price-engine.service.js';
+import {
+  calculateDemandScore,
+  calculateNextPrice,
+  calculatePriceFromLevel,
+  calculatePriceLevelDelta,
+  PRICE_LEVELS,
+} from '../src/services/price-engine.service.js';
 
 function request(overrides: Partial<Parameters<typeof calculateNextPrice>[0]> = {}) {
   return calculateNextPrice({
@@ -17,6 +23,31 @@ function request(overrides: Partial<Parameters<typeof calculateNextPrice>[0]> = 
     ...overrides,
   });
 }
+
+describe('дискретные уровни цены', () => {
+  it('принимает только уровни от -30 до +70 с шагом 10', () => {
+    expect(PRICE_LEVELS).toEqual([-30, -20, -10, 0, 10, 20, 30, 40, 50, 60, 70]);
+    for (const level of PRICE_LEVELS) {
+      expect(calculatePriceFromLevel({ originalPrice: 1450, minPrice: 990, maxPrice: 2200, priceStep: 50, levelPercent: level })).toBeDefined();
+    }
+    for (const level of [-35, 5, 15, 80, 10.5]) {
+      expect(() => calculatePriceFromLevel({ originalPrice: 1450, minPrice: 990, maxPrice: 2200, priceStep: 50, levelPercent: level })).toThrow(AppError);
+    }
+  });
+
+  it('использует minPrice как hard floor и maxPrice как ceiling', () => {
+    expect(calculatePriceFromLevel({ originalPrice: 1450, minPrice: 1000, maxPrice: 2200, priceStep: 50, levelPercent: -30 }).toString()).toBe('1000');
+    expect(calculatePriceFromLevel({ originalPrice: 1450, minPrice: 990, maxPrice: 2000, priceStep: 50, levelPercent: 70 }).toString()).toBe('2000');
+  });
+
+  it('расчитывает рост уровнями по подтверждённому спросу', () => {
+    expect(calculatePriceLevelDelta(1, 1)).toBe(0);
+    expect(calculatePriceLevelDelta(2, 2)).toBe(10);
+    expect(calculatePriceLevelDelta(3, 2)).toBe(20);
+    expect(calculatePriceLevelDelta(4, 2)).toBe(30);
+    expect(calculatePriceLevelDelta(1, 0)).toBe(0);
+  });
+});
 
 describe('calculateDemandScore', () => {
   it('считает относительный спрос и clamp-ит его', () => {
