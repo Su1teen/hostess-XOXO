@@ -5,7 +5,7 @@ import {
   calculateNextPrice,
   calculatePriceFromLevel,
   calculatePriceLevelDelta,
-  getPriceLevelPercent,
+  getCanonicalPriceLevelPercent,
   normalizePriceLevelPercent,
   PRICE_LEVELS,
 } from '../src/services/price-engine.service.js';
@@ -39,14 +39,149 @@ describe('дискретные уровни цены', () => {
   });
 
   it('определяет знак и ближайший уровень только относительно originalPrice', () => {
-    expect(getPriceLevelPercent({ originalPrice: 2500, currentPrice: 1990, minPrice: 1990, maxPrice: 4000 })).toBe(-20);
-    expect(getPriceLevelPercent({ originalPrice: 3500, currentPrice: 2490, minPrice: 2490, maxPrice: 5000 })).toBe(-30);
-    expect(getPriceLevelPercent({ originalPrice: 3200, currentPrice: 2190, minPrice: 2190, maxPrice: 5000 })).toBe(-30);
-    expect(getPriceLevelPercent({ originalPrice: 2990, currentPrice: 2590, minPrice: 2000, maxPrice: 5000 })).toBe(-10);
-    expect(getPriceLevelPercent({ originalPrice: 2500, currentPrice: 2750, minPrice: 1000, maxPrice: 4000 })).toBe(10);
-    expect(getPriceLevelPercent({ originalPrice: 2500, currentPrice: 2500, minPrice: 1000, maxPrice: 4000 })).toBe(0);
+    // 1. original 2500, current 1990 → -20%
+    expect(getCanonicalPriceLevelPercent({ originalPrice: 2500, currentPrice: 1990 })).toBe(-20);
+    // 2. original 3500, current 2490 → -30%
+    expect(getCanonicalPriceLevelPercent({ originalPrice: 3500, currentPrice: 2490 })).toBe(-30);
+    // 3. original 3200, current 2190 → -30%
+    expect(getCanonicalPriceLevelPercent({ originalPrice: 3200, currentPrice: 2190 })).toBe(-30);
+    // 4. original 2990, current 2590 → -10%
+    expect(getCanonicalPriceLevelPercent({ originalPrice: 2990, currentPrice: 2590 })).toBe(-10);
+    // 5. current above original → positive
+    expect(getCanonicalPriceLevelPercent({ originalPrice: 2500, currentPrice: 2750 })).toBe(10);
+    // 6. current equals original → 0
+    expect(getCanonicalPriceLevelPercent({ originalPrice: 2500, currentPrice: 2500 })).toBe(0);
   });
 
+  it('current ниже original никогда не возвращает положительный уровень', () => {
+    for (const current of [100, 500, 990, 1500, 1990, 2100, 2499]) {
+      const level = getCanonicalPriceLevelPercent({ originalPrice: 2500, currentPrice: current });
+      expect(level).toBeLessThanOrEqual(0);
+    }
+  });
+
+  it('current выше original никогда не возвращает отрицательный уровень', () => {
+    for (const current of [2501, 2750, 3000, 3500, 4000, 5000]) {
+      const level = getCanonicalPriceLevelPercent({ originalPrice: 2500, currentPrice: current });
+      expect(level).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('current равен original → 0', () => {
+    expect(getCanonicalPriceLevelPercent({ originalPrice: 2500, currentPrice: 2500 })).toBe(0);
+    expect(getCanonicalPriceLevelPercent({ originalPrice: 2190, currentPrice: 2190 })).toBe(0);
+  });
+
+  it('при выходе ниже -30 возвращает -30 (hard floor)', () => {
+    expect(getCanonicalPriceLevelPercent({ originalPrice: 2190, currentPrice: 990 })).toBe(-30);
+    expect(getCanonicalPriceLevelPercent({ originalPrice: 2500, currentPrice: 100 })).toBe(-30);
+  });
+
+  it('при выходе выше +70 возвращает +70 (hard ceiling)', () => {
+    expect(getCanonicalPriceLevelPercent({ originalPrice: 1000, currentPrice: 2000 })).toBe(70);
+    expect(getCanonicalPriceLevelPercent({ originalPrice: 1000, currentPrice: 5000 })).toBe(70);
+  });
+
+  it('разрешённые значения точно -30..+70 с шагом 10', () => {
+    expect(PRICE_LEVELS).toEqual([-30, -20, -10, 0, 10, 20, 30, 40, 50, 60, 70]);
+  });
+
+  it('отклоняет запрещённые уровни (-25, +15, дробные)', () => {
+    expect(() => normalizePriceLevelPercent(-25)).toThrow(AppError);
+    expect(() => normalizePriceLevelPercent(15)).toThrow(AppError);
+    expect(() => normalizePriceLevelPercent(10.5)).toThrow(AppError);
+    expect(() => normalizePriceLevelPercent(-5)).toThrow(AppError);
+    expect(() => normalizePriceLevelPercent(5)).toThrow(AppError);
+    expect(() => normalizePriceLevelPercent(25)).toThrow(AppError);
+  });
+
+  it('переход между раундами меняет уровень только на разрешённые значения', () => {
+    const currentLevel = -30;
+    const delta = calculatePriceLevelDelta(2, 2); // → 10
+    const nextLevel = Math.max(-30, Math.min(70, Math.round((currentLevel + delta) / 10) * 10));
+    expect(nextLevel).toBe(-20);
+    expect(PRICE_LEVELS).toContain(nextLevel);
+    // Переход с -20 на -10
+    const nextDelta = calculatePriceLevelDelta(2, 2);
+    const nextNextLevel = Math.max(-30, Math.min(70, Math.round((nextLevel + nextDelta) / 10) * 10));
+    expect(nextNextLevel).toBe(-10);
+    expect(PRICE_LEVELS).toContain(nextNextLevel);
+  });
+});
+
+describe('Bud: minPrice и canonical -30%', () => {
+  const BUD_ORIGINAL = 2190;
+  const BUD_MIN_PRICE = 1550;
+  const PRICE_STEP = 50;
+
+  it('Bud originalPrice = 2190', () => {
+    expect(BUD_ORIGINAL).toBe(2190);
+  });
+
+  it('Bud minPrice = 1550', () => {
+    expect(BUD_MIN_PRICE).toBe(1550);
+  });
+
+  it('Bud -30% raw price = 1533', () => {
+    const rawPrice = BUD_ORIGINAL * 0.70;
+    expect(rawPrice).toBe(1533);
+  });
+
+  it('Bud rounded price = 1550 при шаге 50', () => {
+    const price = calculatePriceFromLevel({
+      originalPrice: BUD_ORIGINAL,
+      minPrice: BUD_MIN_PRICE,
+      maxPrice: 3300,
+      priceStep: PRICE_STEP,
+      priceLevelPercent: -30,
+    });
+    expect(price.toString()).toBe('1550');
+  });
+
+  it('Bud initial currentPrice = 1550', () => {
+    const price = calculatePriceFromLevel({
+      originalPrice: BUD_ORIGINAL,
+      minPrice: BUD_MIN_PRICE,
+      maxPrice: 3300,
+      priceStep: PRICE_STEP,
+      priceLevelPercent: -30,
+    });
+    expect(Number(price.toString())).toBe(1550);
+  });
+
+  it('Bud initial priceLevelPercent = -30', () => {
+    const level = getCanonicalPriceLevelPercent({ originalPrice: BUD_ORIGINAL, currentPrice: BUD_MIN_PRICE });
+    expect(level).toBe(-30);
+  });
+
+  it('Bud никогда не возвращается к minPrice 990', () => {
+    // При -30% цена = 1550, а не 990
+    const price = calculatePriceFromLevel({
+      originalPrice: BUD_ORIGINAL,
+      minPrice: BUD_MIN_PRICE,
+      maxPrice: 3300,
+      priceStep: PRICE_STEP,
+      priceLevelPercent: -30,
+    });
+    expect(Number(price.toString())).not.toBe(990);
+    expect(Number(price.toString())).toBe(1550);
+  });
+
+  it('Bud canonical ставка -30% при currentPrice = 1550', () => {
+    const level = getCanonicalPriceLevelPercent({ originalPrice: BUD_ORIGINAL, currentPrice: 1550 });
+    expect(level).toBe(-30);
+    expect(level).toBeLessThanOrEqual(0);
+  });
+
+  it('Bud не показывает положительную ставку при цене ниже originalPrice', () => {
+    for (const current of [990, 1000, 1550, 1800, 2000, 2189]) {
+      const level = getCanonicalPriceLevelPercent({ originalPrice: BUD_ORIGINAL, currentPrice: current });
+      expect(level).toBeLessThanOrEqual(0);
+    }
+  });
+});
+
+describe('дискретные уровни цены — дополнительные проверки', () => {
   it('использует minPrice как hard floor и maxPrice как ceiling', () => {
     expect(calculatePriceFromLevel({ originalPrice: 1450, minPrice: 1000, maxPrice: 2200, priceStep: 50, priceLevelPercent: -30 }).toString()).toBe('1000');
     expect(calculatePriceFromLevel({ originalPrice: 1450, minPrice: 990, maxPrice: 2000, priceStep: 50, priceLevelPercent: 70 }).toString()).toBe('2000');

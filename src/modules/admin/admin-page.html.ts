@@ -1068,10 +1068,16 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           var current = safeNumber(product.currentPrice, original);
           if (original <= 0) { return 0; }
           var actual = (current - original) / original * 100;
-          var levels = [-30, -20, -10, 0, 10, 20, 30, 40, 50, 60, 70];
-          return levels.reduce(function (nearest, candidate) {
+          var allLevels = [-30, -20, -10, 0, 10, 20, 30, 40, 50, 60, 70];
+          // Sign enforcement: if actual < 0, only levels <= 0; if actual > 0, only levels >= 0.
+          var candidates = allLevels.filter(function (lvl) {
+            if (actual < 0) { return lvl <= 0; }
+            if (actual > 0) { return lvl >= 0; }
+            return lvl === 0;
+          });
+          return candidates.reduce(function (nearest, candidate) {
             return Math.abs(actual - candidate) < Math.abs(actual - nearest) ? candidate : nearest;
-          }, levels[0]);
+          }, candidates[0]);
         }
 
         function normalizeProduct(product, index) {

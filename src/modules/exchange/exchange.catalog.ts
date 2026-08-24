@@ -34,7 +34,7 @@ export const EXCHANGE_PRODUCTS: ExchangeSeedProduct[] = [
   ['khortytsa-ice', 'Хортица Айс', 'Крепкий алкоголь', 890, 590, 590, 50],
   ['kyzylzhar', 'Кызылжар', 'Крепкий алкоголь', 790, 590, 590, 50],
   ['miller-bottle', 'Миллер', 'Бутылочное пиво', 1650, 990, 990, null],
-  ['bud-bottle', 'Bud', 'Бутылочное пиво', 2190, 990, 990, null],
+  ['bud-bottle', 'Bud', 'Бутылочное пиво', 2190, 1550, 1550, null],
   ['corona-extra', 'Corona Extra', 'Бутылочное пиво', 2990, 2590, 2590, null],
   ['paulaner', 'Paulaner', 'Бутылочное пиво', 2500, 1990, 1990, null],
   ['tsingtao', 'Tsingtao', 'Бутылочное пиво', 2500, 1990, 1990, null],

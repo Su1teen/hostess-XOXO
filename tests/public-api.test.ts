@@ -44,4 +44,42 @@ describe('public exchange API', () => {
     expect(products[0].currentDiscountPercent).toBeUndefined();
     await app.close();
   });
+
+  it('Bud: public API возвращает currentPrice=1550, minPrice=1550, priceLevelPercent=-30', async () => {
+    const app = fastify();
+    app.decorate('env', env as never);
+    app.decorate('services', {
+      rounds: { getCurrentPublishedRound: vi.fn(async () => null) },
+    } as never);
+    app.decorate('prisma', {
+      exchangeProduct: {
+        findMany: vi.fn(async () => [
+          {
+            id: 'bud-id',
+            name: 'Bud',
+            category: 'Бутылочное пиво',
+            currency: 'KZT',
+            originalPrice: 2190,
+            currentPrice: 1550,
+            minPrice: 1550,
+            priceLevelPercent: -30,
+            currentDiscountPercent: 29.2237,
+            isActive: true,
+          },
+        ]),
+      },
+    } as never);
+    await app.register(publicRoutes);
+
+    const response = await app.inject({ method: 'GET', url: '/api/v1/public/products' });
+    expect(response.statusCode).toBe(200);
+    const product = response.json().products[0];
+    expect(product.name).toBe('Bud');
+    expect(product.price).toBe(1550);
+    expect(product.minPrice).toBe(1550);
+    expect(product.originalPrice).toBe(2190);
+    expect(product.priceLevelPercent).toBe(-30);
+    expect(product.price).not.toBe(990);
+    await app.close();
+  });
 });

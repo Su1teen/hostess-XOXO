@@ -8,7 +8,7 @@ import {
 import { roundToStep } from '../../lib/money.js';
 import { getCurrentRound } from '../../lib/time.js';
 import { calculateDiscountPercent } from '../../services/discount.service.js';
-import { getPriceLevelPercent } from '../../services/price-engine.service.js';
+import { getCanonicalPriceLevelPercent } from '../../services/price-engine.service.js';
 
 const PAUSED_SETTING = 'exchange.paused';
 const ROUND_INCLUDE = { prices: { include: { exchangeProduct: true } } } as const;
@@ -49,7 +49,7 @@ export class ExchangeService {
           startPrice: product.minPrice,
           currentPrice: product.minPrice,
           currentDiscountPercent: initialDiscount.toFixed(4),
-          priceLevelPercent: getPriceLevelPercent({ originalPrice: product.originalPrice, currentPrice: product.minPrice, minPrice: product.minPrice, maxPrice: maxPrice }),
+          priceLevelPercent: getCanonicalPriceLevelPercent({ originalPrice: product.originalPrice, currentPrice: product.minPrice }),
           actualDiscountPercent: initialDiscount.toFixed(4),
           minPrice: product.minPrice,
           maxPrice: maxPrice.toFixed(2),
@@ -98,7 +98,7 @@ export class ExchangeService {
               calculatedPrice: product.currentPrice,
               publishedPrice: product.currentPrice,
               originalPrice: product.originalPrice,
-              priceLevelPercent: getPriceLevelPercent({ originalPrice: product.originalPrice, currentPrice: product.currentPrice, minPrice: product.minPrice, maxPrice: product.maxPrice }),
+              priceLevelPercent: getCanonicalPriceLevelPercent({ originalPrice: product.originalPrice, currentPrice: product.currentPrice }),
               discountPercent: calculateDiscountPercent(
                 product.originalPrice.toString(),
                 product.currentPrice.toString(),

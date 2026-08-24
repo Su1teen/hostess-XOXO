@@ -38,21 +38,55 @@ export function normalizePriceLevelPercent(value: unknown): PriceLevelPercent {
   return value as PriceLevelPercent;
 }
 
-export function getPriceLevelPercent(request: {
+/**
+ * Каноническая ставка биржи: всегда считается относительно originalPrice.
+ *
+ * Формула фактического изменения:
+ *   actualPercent = ((currentPrice - originalPrice) / originalPrice) * 100
+ *
+ * Правила:
+ * 1. Выбирает ближайший уровень из PRICE_LEVELS.
+ * 2. Никогда не меняет знак на противоположный:
+ *    - actualPercent < 0 → результат ≤ 0;
+ *    - actualPercent > 0 → результат ≥ 0;
+ *    - actualPercent = 0 → результат = 0.
+ * 3. При выходе ниже -30 возвращает -30 (hard floor).
+ * 4. При выходе выше +70 возвращает +70 (hard ceiling).
+ * 5. При равном расстоянии приоритет у нижнего/дисконтного уровня.
+ *
+ * Знак НЕ определяется через minPrice, previousPrice, roundChangePercent
+ * или абсолютную разницу currentPrice - minPrice.
+ */
+export function getCanonicalPriceLevelPercent(request: {
   originalPrice: MoneyInput;
   currentPrice: MoneyInput;
-  minPrice?: MoneyInput;
-  maxPrice?: MoneyInput;
 }): PriceLevelPercent {
   const original = toDecimal(request.originalPrice);
   if (original.isZero()) return 0;
   const actual = toDecimal(request.currentPrice).minus(original).div(original).mul(100);
-  return PRICE_LEVELS.reduce((nearest, level) => {
+
+  // Фильтруем уровни по знаку: если actual < 0, исключаем положительные;
+  // если actual > 0, исключаем отрицательные; если actual = 0, оставляем только 0.
+  const sign = actual.comparedTo(0);
+  const candidates = PRICE_LEVELS.filter((level) => {
+    if (sign < 0) return level <= 0;
+    if (sign > 0) return level >= 0;
+    return level === 0;
+  });
+
+  // Выбираем ближайший уровень; при равном расстоянии приоритет у меньшего (дисконтного).
+  // candidates всегда содержит хотя бы один элемент (0 входит во все ветви фильтра).
+  const initial: PriceLevelPercent = candidates[0] ?? 0;
+  return candidates.reduce((nearest, level) => {
     const distance = actual.minus(level).abs();
     const nearestDistance = actual.minus(nearest).abs();
+    // lt (строго меньше) сохраняет приоритет первого встречного — меньшего уровня.
     return distance.lt(nearestDistance) ? level : nearest;
-  }, PRICE_LEVELS[0]);
+  }, initial);
 }
+
+/** @deprecated Используйте getCanonicalPriceLevelPercent. */
+export const getPriceLevelPercent = getCanonicalPriceLevelPercent;
 
 export function calculatePriceFromLevel(request: {
   originalPrice: MoneyInput;

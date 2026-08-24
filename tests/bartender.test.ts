@@ -408,4 +408,99 @@ describe('страница /admin', () => {
     expect(ADMIN_PAGE_HTML).toContain('@media (max-width: 700px)');
     expect(ADMIN_PAGE_HTML).toContain('min-height: 44px');
   });
+
+  it('rate display использует один canonical field и правильный знак', () => {
+    expect(ADMIN_PAGE_HTML).toContain('Ставка');
+    expect(ADMIN_PAGE_HTML).toContain('levelLabel');
+    expect(ADMIN_PAGE_HTML).toContain('priceLevelPercent');
+    // Знак минус для отрицательных уровней
+    expect(ADMIN_PAGE_HTML).toContain("level > 0 ? '+' : ''");
+    // Не использует changePercent для ставки
+    expect(ADMIN_PAGE_HTML).not.toContain('changePercent');
+    // Не показывает "Скидка" как ставку
+    expect(ADMIN_PAGE_HTML).not.toContain('Скидка 55%');
+    expect(ADMIN_PAGE_HTML).not.toContain('Наценка');
+  });
+
+  it('UI показывает Меню, Минимум, Сейчас, Ставку', () => {
+    expect(ADMIN_PAGE_HTML).toContain('Меню');
+    expect(ADMIN_PAGE_HTML).toContain('Минимум');
+    expect(ADMIN_PAGE_HTML).toContain('Сейчас');
+    expect(ADMIN_PAGE_HTML).toContain('Ставка');
+  });
+
+  it('UI safePriceLevel использует sign enforcement относительно originalPrice', () => {
+    expect(ADMIN_PAGE_HTML).toContain('actual < 0');
+    expect(ADMIN_PAGE_HTML).toContain('actual > 0');
+    expect(ADMIN_PAGE_HTML).toContain('lvl <= 0');
+    expect(ADMIN_PAGE_HTML).toContain('lvl >= 0');
+  });
+});
+
+describe('bartender API: Bud priceLevelPercent', () => {
+  it('bartender API возвращает Bud priceLevelPercent = -30', async () => {
+    const app = fastify();
+    app.decorate('services', {
+      bartender: {
+        listProducts: vi.fn(async () => ({
+          products: [
+            {
+              id: 'bud-id',
+              slug: 'bud-bottle',
+              name: 'Bud',
+              category: 'Бутылочное пиво',
+              volumeMl: null,
+              currency: 'KZT',
+              originalPrice: 2190,
+              currentPrice: 1550,
+              priceLevelPercent: -30,
+              minPrice: 1550,
+              maxPrice: 3300,
+              priceStep: 50,
+              currentDiscountPercent: 29.2237,
+              salesQuantity: 0,
+              manualPriceAppliedAt: null,
+              updatedAt: '2026-08-24T12:00:00.000Z',
+            },
+          ],
+          roundId: 'r1',
+          generatedAt: '2026-08-24T12:00:00.000Z',
+          currency: 'KZT',
+        })),
+        status: vi.fn(async () => ({ running: true })),
+        incrementSales: vi.fn(async () => ({})),
+        decrementSales: vi.fn(async () => ({})),
+        setSalesQuantity: vi.fn(async () => ({})),
+      },
+      bartenderSessions: new BartenderSessionService({
+        pin: '1234',
+        sessionTtlMinutes: 10,
+        maxAttempts: 50,
+        attemptWindowSeconds: 60,
+      }),
+      audit: { log: vi.fn(async () => undefined) },
+    } as never);
+    await app.register(bartenderRoutes);
+
+    const loginResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/bartender/auth',
+      payload: { pin: '1234' },
+    });
+    const token = loginResponse.json().token;
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/bartender/exchange/products',
+      headers: { 'x-bartender-token': token },
+    });
+    expect(response.statusCode).toBe(200);
+    const product = response.json().products[0];
+    expect(product.name).toBe('Bud');
+    expect(product.priceLevelPercent).toBe(-30);
+    expect(product.currentPrice).toBe(1550);
+    expect(product.minPrice).toBe(1550);
+    expect(product.priceLevelPercent).toBeLessThanOrEqual(0);
+    await app.close();
+  });
 });
