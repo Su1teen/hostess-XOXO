@@ -373,26 +373,30 @@ describe('страница /admin', () => {
     expect(ADMIN_PAGE_HTML).not.toContain('Рассчитать');
     expect(ADMIN_PAGE_HTML).not.toContain('Применить');
     expect(ADMIN_PAGE_HTML).not.toContain('bt-disc');
-    expect(ADMIN_PAGE_HTML).toContain('Уровень');
+    expect(ADMIN_PAGE_HTML).not.toContain('Уровень');
+    expect(ADMIN_PAGE_HTML).not.toContain('Минимальная цена');
+    expect(ADMIN_PAGE_HTML).toContain('Ставка');
   });
 
-  it('основное действие — Продано +1, не требует скидку', () => {
-    expect(ADMIN_PAGE_HTML).toContain('Продано +1');
-    expect(ADMIN_PAGE_HTML).toContain('sales/increment');
+  it('оставляет один quantity control с абсолютным сохранением', () => {
+    expect(ADMIN_PAGE_HTML).not.toContain('Продано +1');
+    expect(ADMIN_PAGE_HTML).toContain('sales/quantity');
+    expect(ADMIN_PAGE_HTML).toContain('quantity.value');
     expect(ADMIN_PAGE_HTML).not.toContain('selectedDiscountPercent');
   });
 
   it('округляет скидку только для отображения и поддерживает абсолютное количество', () => {
-    expect(ADMIN_PAGE_HTML).toContain('Math.round(Number(value))');
+    expect(ADMIN_PAGE_HTML).toContain('Math.round(level)');
     expect(ADMIN_PAGE_HTML).toContain("'/exchange/products/' + product.id + '/sales/quantity'");
     expect(ADMIN_PAGE_HTML).toContain("quantity.min = '0'");
     expect(ADMIN_PAGE_HTML).toContain("quantity.max = '9999'");
   });
 
-  it('имеет delta-контрол и мобильную responsive-разметку', () => {
-    expect(ADMIN_PAGE_HTML).toContain('Изменить на:');
-    expect(ADMIN_PAGE_HTML).toContain('Убавить ');
-    expect(ADMIN_PAGE_HTML).toContain('Добавить ');
+  it('имеет step-контрол и мобильную responsive-разметку', () => {
+    expect(ADMIN_PAGE_HTML).toContain('Шаг:');
+    expect(ADMIN_PAGE_HTML).not.toContain('Изменить на:');
+    expect(ADMIN_PAGE_HTML).not.toContain('var decrease =');
+    expect(ADMIN_PAGE_HTML).not.toContain('var increase =');
     expect(ADMIN_PAGE_HTML).toContain("'/exchange/products/' + product.id + '/sales/' + endpoint");
     expect(ADMIN_PAGE_HTML).toContain('@media (max-width: 700px)');
     expect(ADMIN_PAGE_HTML).toContain('min-height: 44px');

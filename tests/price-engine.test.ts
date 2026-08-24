@@ -5,6 +5,7 @@ import {
   calculateNextPrice,
   calculatePriceFromLevel,
   calculatePriceLevelDelta,
+  normalizePriceLevelPercent,
   PRICE_LEVELS,
 } from '../src/services/price-engine.service.js';
 
@@ -28,16 +29,25 @@ describe('дискретные уровни цены', () => {
   it('принимает только уровни от -30 до +70 с шагом 10', () => {
     expect(PRICE_LEVELS).toEqual([-30, -20, -10, 0, 10, 20, 30, 40, 50, 60, 70]);
     for (const level of PRICE_LEVELS) {
-      expect(calculatePriceFromLevel({ originalPrice: 1450, minPrice: 990, maxPrice: 2200, priceStep: 50, levelPercent: level })).toBeDefined();
+      expect(normalizePriceLevelPercent(level)).toBe(level);
+      expect(calculatePriceFromLevel({ originalPrice: 1450, minPrice: 990, maxPrice: 2200, priceStep: 50, priceLevelPercent: level })).toBeDefined();
     }
     for (const level of [-35, 5, 15, 80, 10.5]) {
-      expect(() => calculatePriceFromLevel({ originalPrice: 1450, minPrice: 990, maxPrice: 2200, priceStep: 50, levelPercent: level })).toThrow(AppError);
+      expect(() => calculatePriceFromLevel({ originalPrice: 1450, minPrice: 990, maxPrice: 2200, priceStep: 50, priceLevelPercent: level })).toThrow(AppError);
     }
   });
 
   it('использует minPrice как hard floor и maxPrice как ceiling', () => {
-    expect(calculatePriceFromLevel({ originalPrice: 1450, minPrice: 1000, maxPrice: 2200, priceStep: 50, levelPercent: -30 }).toString()).toBe('1000');
-    expect(calculatePriceFromLevel({ originalPrice: 1450, minPrice: 990, maxPrice: 2000, priceStep: 50, levelPercent: 70 }).toString()).toBe('2000');
+    expect(calculatePriceFromLevel({ originalPrice: 1450, minPrice: 1000, maxPrice: 2200, priceStep: 50, priceLevelPercent: -30 }).toString()).toBe('1000');
+    expect(calculatePriceFromLevel({ originalPrice: 1450, minPrice: 990, maxPrice: 2000, priceStep: 50, priceLevelPercent: 70 }).toString()).toBe('2000');
+  });
+
+  it('переходит с -30 на -20 после подтверждённого спроса', () => {
+    const currentLevel = -30;
+    const nextLevel = currentLevel + calculatePriceLevelDelta(2, 2);
+    expect(nextLevel).toBe(-20);
+    expect(calculatePriceFromLevel({ originalPrice: 1000, minPrice: 700, maxPrice: 2000, priceStep: 50, priceLevelPercent: currentLevel }).toString()).toBe('700');
+    expect(calculatePriceFromLevel({ originalPrice: 1000, minPrice: 700, maxPrice: 2000, priceStep: 50, priceLevelPercent: nextLevel }).toString()).toBe('800');
   });
 
   it('расчитывает рост уровнями по подтверждённому спросу', () => {

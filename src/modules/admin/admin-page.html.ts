@@ -188,14 +188,6 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
       .bt-prices div { font-size: 12px; color: var(--muted); }
       .bt-prices b { display: block; font-size: 15px; color: var(--text); font-weight: 600; }
       .bt-prices .bt-now b { font-size: 22px; color: #58a6ff; }
-      .bt-sale-primary { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
-      .bt-sale-primary .bt-do-sale {
-        flex: 1; padding: 14px 12px; font-size: 17px; font-weight: 600;
-        background: #238636; border: 1px solid #2ea043; color: #fff; cursor: pointer;
-      }
-      .bt-sale-primary .bt-do-sale:disabled { opacity: 0.6; cursor: wait; }
-      .bt-sale-primary .bt-count { font-size: 13px; color: var(--muted); white-space: nowrap; }
-      .bt-sale-primary .bt-count b { color: var(--text); font-size: 18px; }
       .bt-sales { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
       .bt-sales button { margin: 0; min-width: 44px; min-height: 44px; padding: 8px 14px; font-size: 14px; background: #21262d; border: 1px solid var(--border); cursor: pointer; }
       .bt-sales button:disabled { opacity: 0.6; cursor: wait; }
@@ -212,10 +204,6 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         .bt-top .bt-actions { margin-left: 0; width: 100%; }
         .bt-top .bt-actions button { margin-left: 0; margin-right: 6px; }
         .bt-card { min-width: 0; }
-      }
-      @media (max-width: 520px) {
-        .bt-sale-primary { align-items: stretch; }
-        .bt-sale-primary .bt-count { align-self: center; }
       }
       @media (max-width: 360px) {
         .bt-sales { gap: 4px; }
@@ -1097,13 +1085,6 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           return state.cards[id];
         }
 
-        function discountLabel(value) {
-          var rounded = Math.round(Number(value));
-          return rounded < 0
-            ? 'Наценка: +' + Math.abs(rounded) + '%'
-            : 'Скидка: ' + rounded + '%';
-        }
-
         function levelLabel(value) {
           var level = Number(value);
           return (level > 0 ? '+' : '') + Math.round(level) + '%';
@@ -1149,11 +1130,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           prices.appendChild(priceCell('Меню', price(product.originalPrice), ''));
           prices.appendChild(priceCell('Минимум', price(product.minPrice), ''));
           prices.appendChild(priceCell('Сейчас', price(product.currentPrice), 'bt-now'));
-          prices.appendChild(priceCell('Уровень', levelLabel(product.priceLevelPercent), ''));
-          prices.appendChild(priceCell('Скидка', discountLabel(product.currentDiscountPercent), ''));
-          if (Number(product.currentPrice) === Number(product.minPrice)) {
-            prices.appendChild(priceCell('Статус', 'Минимальная цена', 'status warn'));
-          }
+          prices.appendChild(priceCell('Ставка', levelLabel(product.priceLevelPercent), ''));
           node.appendChild(prices);
 
           var roundInfo = document.createElement('div');
@@ -1161,44 +1138,6 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           roundInfo.textContent = 'Раунд до: ' + time(state.roundEndsAt);
           node.appendChild(roundInfo);
 
-          var salePrimary = document.createElement('div');
-          salePrimary.className = 'bt-sale-primary';
-          var saleBtn = document.createElement('button');
-          saleBtn.type = 'button';
-          saleBtn.className = 'bt-do-sale';
-          saleBtn.textContent = 'Продано +1';
-          saleBtn.disabled = card.updatePending;
-          saleBtn.addEventListener('click', function () {
-            if (card.updatePending) { return; }
-            card.updatePending = true;
-            saleBtn.disabled = true;
-            saleBtn.textContent = 'Запись...';
-            api('POST', '/exchange/products/' + product.id + '/sales/increment', { quantity: 1 })
-              .then(function (result) {
-                product.salesQuantity = result.quantity || result.salesQuantity || 0;
-                card.confirmedQuantity = product.salesQuantity;
-                card.quantityDraft = String(product.salesQuantity);
-                card.quantityEditing = false;
-                var msg = 'Продажа записана: ' + price(result.priceAtSale) +
-                  ' · ' + discountLabel(result.discountPercentAtSale) +
-                  ' · до ' + time(result.roundEndsAt);
-                note(card, msg, 'ok');
-              })
-              .catch(function (error) { note(card, error.message, 'err'); })
-              .finally(function () {
-                card.updatePending = false;
-                renderGrid();
-              });
-          });
-          salePrimary.appendChild(saleBtn);
-          var saleCounter = document.createElement('span');
-          saleCounter.className = 'bt-count';
-          saleCounter.appendChild(document.createTextNode('продажи: '));
-          var saleCounterValue = document.createElement('b');
-          saleCounterValue.textContent = String(product.salesQuantity);
-          saleCounter.appendChild(saleCounterValue);
-          salePrimary.appendChild(saleCounter);
-          node.appendChild(salePrimary);
 
           var saleSecondary = document.createElement('div');
           saleSecondary.className = 'bt-sales';
@@ -1209,7 +1148,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           var minus = document.createElement('button');
           minus.type = 'button';
           minus.textContent = '−';
-          minus.setAttribute('aria-label', 'Убавить количество продаж');
+          minus.setAttribute('aria-label', 'Уменьшить количество продаж');
           minus.disabled = card.updatePending;
           var quantity = document.createElement('input');
           quantity.type = 'number';
@@ -1237,7 +1176,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           var plus = document.createElement('button');
           plus.type = 'button';
           plus.textContent = '+';
-          plus.setAttribute('aria-label', 'Добавить количество продаж');
+          plus.setAttribute('aria-label', 'Увеличить количество продаж');
           plus.disabled = card.updatePending;
           var delta = document.createElement('input');
           delta.type = 'number';
@@ -1249,13 +1188,9 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           delta.setAttribute('aria-label', 'Количество для изменения');
           var deltaLabel = document.createElement('span');
           deltaLabel.className = 'bt-delta-label';
-          deltaLabel.textContent = 'Изменить на:';
+          deltaLabel.textContent = 'Шаг:';
           delta.value = card.deltaDraft;
           delta.disabled = card.updatePending;
-          var decrease = document.createElement('button');
-          decrease.type = 'button';
-          var increase = document.createElement('button');
-          increase.type = 'button';
           function deltaValue() {
             var value = Number(delta.value);
             if (!Number.isSafeInteger(value) || value < 1 || value > 9999) {
@@ -1267,19 +1202,12 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
             card.deltaConfirmed = String(value);
             return value;
           }
-          function refreshDeltaLabels() {
-            var value = delta.value || 'N';
-            decrease.textContent = 'Убавить ' + value;
-            increase.textContent = 'Добавить ' + value;
-          }
           delta.addEventListener('input', function () {
             card.deltaDraft = delta.value;
-            refreshDeltaLabels();
           });
           delta.addEventListener('change', function () {
             var value = deltaValue();
             if (value !== null) { delta.value = String(value); }
-            refreshDeltaLabels();
           });
           function changeByDelta(direction) {
             var value = deltaValue();
@@ -1289,8 +1217,6 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
             delta.disabled = true;
             minus.disabled = true;
             plus.disabled = true;
-            decrease.disabled = true;
-            increase.disabled = true;
             var endpoint = direction > 0 ? 'increment' : 'decrement';
             api('POST', '/exchange/products/' + product.id + '/sales/' + endpoint, { quantity: value })
               .then(function (result) {
@@ -1311,17 +1237,11 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           }
           minus.addEventListener('click', function () { changeByDelta(-1); });
           plus.addEventListener('click', function () { changeByDelta(1); });
-          decrease.textContent = 'Убавить ' + (delta.value || 'N');
-          increase.textContent = 'Добавить ' + (delta.value || 'N');
-          decrease.addEventListener('click', function () { changeByDelta(-1); });
-          increase.addEventListener('click', function () { changeByDelta(1); });
           saleSecondary.appendChild(minus);
           saleSecondary.appendChild(quantity);
           saleSecondary.appendChild(plus);
           saleSecondary.appendChild(deltaLabel);
           saleSecondary.appendChild(delta);
-          saleSecondary.appendChild(decrease);
-          saleSecondary.appendChild(increase);
           node.appendChild(saleSecondary);
 
           var stateLine = document.createElement('div');

@@ -31,10 +31,11 @@ export const EXCHANGE_MIN_SALES_FOR_DEMAND = 2;
 export const PRICE_LEVELS = [-30, -20, -10, 0, 10, 20, 30, 40, 50, 60, 70] as const;
 export type PriceLevelPercent = (typeof PRICE_LEVELS)[number];
 
-export function validatePriceLevelPercent(level: number): asserts level is PriceLevelPercent {
-  if (!Number.isInteger(level) || !PRICE_LEVELS.includes(level as PriceLevelPercent)) {
+export function normalizePriceLevelPercent(value: unknown): PriceLevelPercent {
+  if (typeof value !== 'number' || !Number.isInteger(value) || !PRICE_LEVELS.includes(value as PriceLevelPercent)) {
     throw validationError('priceLevelPercent должен быть одним из уровней -30..70 с шагом 10');
   }
+  return value as PriceLevelPercent;
 }
 
 export function nearestPriceLevelPercent(originalPrice: MoneyInput, currentPrice: MoneyInput): PriceLevelPercent {
@@ -53,13 +54,13 @@ export function calculatePriceFromLevel(request: {
   minPrice: MoneyInput;
   maxPrice: MoneyInput;
   priceStep: MoneyInput;
-  levelPercent: number;
+  priceLevelPercent: number;
 }): Decimal {
-  validatePriceLevelPercent(request.levelPercent);
+  const level = normalizePriceLevelPercent(request.priceLevelPercent);
   const original = toMoney(request.originalPrice);
   const minPrice = toMoney(request.minPrice);
   const maxPrice = toMoney(request.maxPrice);
-  const rawPrice = original.mul(new Decimal(1).plus(new Decimal(request.levelPercent).div(100)));
+  const rawPrice = original.mul(new Decimal(1).plus(new Decimal(level).div(100)));
   return toMoney(clamp(roundToStep(rawPrice, request.priceStep), minPrice, maxPrice));
 }
 

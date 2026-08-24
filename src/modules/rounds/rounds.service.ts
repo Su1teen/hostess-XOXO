@@ -141,7 +141,7 @@ export class RoundsService {
             minPrice: product.minPrice,
             maxPrice: product.maxPrice,
             priceStep: product.priceStep,
-            levelPercent: nextLevel,
+            priceLevelPercent: nextLevel,
           });
       const discount = calculateDiscountPercent(product.originalPrice.toString(), nextPrice);
       const roundChange = changePercent(product.currentPrice, nextPrice);
@@ -247,7 +247,7 @@ export class RoundsService {
               minPrice: product.minPrice,
               maxPrice: product.maxPrice,
               priceStep: product.priceStep,
-              levelPercent: nextLevel,
+              priceLevelPercent: nextLevel,
             });
         const discount = calculateDiscountPercent(product.originalPrice.toString(), nextPrice);
         return { product, quantity, nextPrice, discount, demandScore, nextLevel, levelDelta };
