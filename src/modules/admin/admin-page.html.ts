@@ -166,6 +166,9 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
       .bt-filters { display: flex; flex-wrap: wrap; gap: 6px; }
       .bt-filters button { margin: 0; background: #21262d; border: 1px solid var(--border); }
       .bt-filters button[aria-pressed='true'] { background: #1f6feb; border-color: #1f6feb; }
+      .bt-grid-message { padding: 10px 14px 18px; color: var(--muted); }
+      .bt-grid-message.err { color: var(--err); }
+      .bt-grid-message button { margin-left: 8px; }
       .bt-grid {
         flex: 1;
         min-height: 0;
@@ -386,6 +389,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           <div id="btFilters" class="bt-filters"></div>
         </div>
         <div id="btGrid" class="bt-grid"></div>
+        <div id="btGridMessage" class="bt-grid-message" role="status" aria-live="polite"></div>
       </div>
     </div>
 
@@ -880,8 +884,9 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         var workspace = el('bartenderWorkspace');
         var loginMsg = el('bartenderLoginMsg');
         var grid = el('btGrid');
-        var money = new Intl.NumberFormat('ru-RU');
-        var state = { products: [], filter: 'Все', query: '', cards: {}, timer: null, roundEndsAt: null };
+        var gridMessage = el('btGridMessage');
+        var money = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
+        var state = { products: [], filter: 'Все', query: '', cards: {}, timer: null, roundEndsAt: null, catalogStatus: 'idle', catalogError: '' };
 
         function token() { return sessionStorage.getItem(TOKEN_KEY) || ''; }
 
@@ -912,7 +917,9 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
               if (!response.ok) {
                 var text = errorText(json, 'Ошибка запроса');
                 setConnection(false);
-                throw new Error(text);
+                var requestError = new Error(text);
+                requestError.status = response.status;
+                throw requestError;
               }
               setConnection(true);
               return json;
@@ -1003,11 +1010,13 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         }
 
         function refresh() {
-          return Promise.all([
-            api('GET', '/exchange/products'),
-            api('GET', '/exchange/status'),
-          ]).then(function (results) {
-            var products = results[0].products || [];
+          state.catalogStatus = 'loading';
+          state.catalogError = '';
+          renderGridMessage('Загрузка товаров…', '');
+          var catalogRequest = api('GET', '/exchange/products').then(function (payload) {
+            var products = normalizeCatalogResponse(payload);
+            state.products = products;
+            state.catalogStatus = products.length ? 'loaded' : 'empty';
             products.forEach(function (product) {
               var card = cardState(product.id);
               if (!card.updatePending && !card.quantityEditing) {
@@ -1015,11 +1024,96 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
                 card.quantityDraft = String(product.salesQuantity);
               }
             });
-            state.products = products;
-            renderStatus(results[1]);
             renderFilters();
             renderGrid();
-          }).catch(function () {});
+          }).catch(function (error) {
+            state.products = [];
+            state.catalogStatus = error && error.message === 'UNAUTHORIZED' ? 'auth' : 'error';
+            state.catalogError = error && error.message ? error.message : 'Неизвестная ошибка';
+            console.error('[bartender] catalog load failed', {
+              status: error && error.status ? error.status : 0,
+              message: state.catalogError,
+            });
+            renderFilters();
+            renderGrid();
+          });
+          var statusRequest = api('GET', '/exchange/status').then(renderStatus).catch(function (error) {
+            if (!error || error.message !== 'UNAUTHORIZED') {
+              console.error('[bartender] status load failed', {
+                status: error && error.status ? error.status : 0,
+                message: error && error.message ? error.message : 'Неизвестная ошибка',
+              });
+            }
+          });
+          return Promise.all([catalogRequest, statusRequest]);
+        }
+
+        function safeNumber(value, fallback) {
+          if (value === null || value === undefined || value === '') { return fallback; }
+          var number = Number(value);
+          return Number.isFinite(number) ? number : fallback;
+        }
+
+        function safeInteger(value, fallback) {
+          var number = safeNumber(value, fallback);
+          return Number.isSafeInteger(number) ? number : fallback;
+        }
+
+        function safePriceLevel(value, product) {
+          var level = safeInteger(value, null);
+          if (level !== null && [-30, -20, -10, 0, 10, 20, 30, 40, 50, 60, 70].indexOf(level) !== -1) {
+            return level;
+          }
+          var original = safeNumber(product.originalPrice, 0);
+          var current = safeNumber(product.currentPrice, original);
+          if (original <= 0) { return 0; }
+          var actual = (current - original) / original * 100;
+          var levels = [-30, -20, -10, 0, 10, 20, 30, 40, 50, 60, 70];
+          return levels.reduce(function (nearest, candidate) {
+            return Math.abs(actual - candidate) < Math.abs(actual - nearest) ? candidate : nearest;
+          }, levels[0]);
+        }
+
+        function normalizeProduct(product, index) {
+          if (!product || typeof product !== 'object' || typeof product.id !== 'string') {
+            console.error('[bartender] malformed catalog item', { index: index, message: 'missing product id' });
+            return null;
+          }
+          var normalized = {
+            id: product.id,
+            name: typeof product.name === 'string' && product.name ? product.name : 'Без названия',
+            category: typeof product.category === 'string' && product.category ? product.category : 'Без категории',
+            volumeMl: safeInteger(product.volumeMl, null),
+            originalPrice: safeNumber(product.originalPrice, safeNumber(product.currentPrice, 0)),
+            currentPrice: safeNumber(product.currentPrice, safeNumber(product.originalPrice, 0)),
+            minPrice: safeNumber(product.minPrice, 0),
+            maxPrice: safeNumber(product.maxPrice, 0),
+            priceLevelPercent: safePriceLevel(product.priceLevelPercent, product),
+            currentDiscountPercent: safeNumber(product.currentDiscountPercent, 0),
+            salesQuantity: Math.max(0, safeInteger(product.salesQuantity, safeInteger(product.quantity, 0))),
+            manualPriceAppliedAt: typeof product.manualPriceAppliedAt === 'string' ? product.manualPriceAppliedAt : null,
+          };
+          return normalized;
+        }
+
+        function normalizeCatalogResponse(payload) {
+          var items = Array.isArray(payload) ? payload : payload && Array.isArray(payload.products) ? payload.products
+            : payload && Array.isArray(payload.items) ? payload.items
+              : payload && payload.data ? (Array.isArray(payload.data) ? payload.data : payload.data.products || payload.data.items || []) : [];
+          return items.map(normalizeProduct).filter(Boolean);
+        }
+
+        function renderGridMessage(text, kind, retry) {
+          gridMessage.textContent = text || '';
+          gridMessage.className = 'bt-grid-message' + (kind ? ' ' + kind : '');
+          if (retry) {
+            var button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'secondary';
+            button.textContent = 'Повторить';
+            button.addEventListener('click', refresh);
+            gridMessage.appendChild(button);
+          }
         }
 
         function renderStatus(status) {
@@ -1099,14 +1193,36 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         function renderGrid() {
           var products = visibleProducts();
           grid.textContent = '';
-          if (products.length === 0) {
-            var empty = document.createElement('p');
-            empty.className = 'muted';
-            empty.textContent = 'Ничего не найдено.';
-            grid.appendChild(empty);
+          if (state.catalogStatus === 'loading') {
+            renderGridMessage('Загрузка товаров…', '');
             return;
           }
-          products.forEach(function (product) { grid.appendChild(renderCard(product)); });
+          if (state.catalogStatus === 'auth') {
+            renderGridMessage('Сессия истекла. Войдите снова.', 'err', false);
+            return;
+          }
+          if (state.catalogStatus === 'error') {
+            renderGridMessage('Не удалось загрузить товары: ' + state.catalogError, 'err', true);
+            return;
+          }
+          if (products.length === 0) {
+            renderGridMessage(state.catalogStatus === 'empty' ? 'Товары не загружены.' : 'Товары не найдены.', '', false);
+            return;
+          }
+          renderGridMessage('', '', false);
+          products.forEach(function (product, index) {
+            try {
+              grid.appendChild(renderCard(product));
+            } catch (error) {
+              console.error('[bartender] catalog item render failed', {
+                index: index,
+                message: error && error.message ? error.message : 'Неизвестная ошибка',
+              });
+            }
+          });
+          if (!grid.children.length) {
+            renderGridMessage('Товары не удалось отобразить.', 'err', true);
+          }
         }
 
         function renderCard(product) {
@@ -1213,7 +1329,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           saleSecondary.appendChild(minus);
           saleSecondary.appendChild(quantity);
           saleSecondary.appendChild(plus);
-          saleSecondary.appendChild(applyQuantity);
+          saleSecondary.appendChild(applyButton);
           node.appendChild(saleSecondary);
 
           var stateLine = document.createElement('div');

@@ -384,6 +384,7 @@ describe('страница /admin', () => {
     expect(ADMIN_PAGE_HTML).toContain('sales/quantity');
     expect(ADMIN_PAGE_HTML).toContain('quantity.value');
     expect(ADMIN_PAGE_HTML).not.toContain('selectedDiscountPercent');
+    expect(ADMIN_PAGE_HTML).not.toContain('applyQuantity');
   });
 
   it('округляет скидку только для отображения и поддерживает абсолютное количество', () => {
@@ -393,7 +394,12 @@ describe('страница /admin', () => {
     expect(ADMIN_PAGE_HTML).toContain("quantity.max = '9999'");
   });
 
-  it('имеет один quantity control и мобильную responsive-разметку', () => {
+  it('имеет безопасную загрузку каталога и один quantity control', () => {
+    expect(ADMIN_PAGE_HTML).toContain('normalizeCatalogResponse');
+    expect(ADMIN_PAGE_HTML).toContain('safePriceLevel');
+    expect(ADMIN_PAGE_HTML).toContain('Загрузка товаров…');
+    expect(ADMIN_PAGE_HTML).toContain('Не удалось загрузить товары:');
+    expect(ADMIN_PAGE_HTML).toContain('Повторить');
     expect(ADMIN_PAGE_HTML).not.toContain('Шаг:');
     expect(ADMIN_PAGE_HTML).not.toContain('Изменить на:');
     expect(ADMIN_PAGE_HTML).not.toContain('bt-delta');
