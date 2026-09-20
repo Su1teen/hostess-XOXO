@@ -16,7 +16,26 @@ import {
   calculateExchangeDemandScore,
   calculatePriceFromLevel,
   calculatePriceLevelDelta,
+  clampPriceLevel,
 } from '../../services/price-engine.service.js';
+
+/** Минимальный логгер перехода раундов: только структурированные события без секретов. */
+export interface RoundsLogger {
+  info(payload: Record<string, unknown>, message?: string): void;
+  error(payload: Record<string, unknown>, message?: string): void;
+}
+
+/** Наблюдаемое состояние последнего перехода — для админ-диагностики. */
+export interface RoundTransitionState {
+  lastStartedAt: string | null;
+  lastCompletedAt: string | null;
+  lastError: string | null;
+  lastErrorAt: string | null;
+  lastClosedRoundKey: string | null;
+  lastCreatedRoundKey: string | null;
+  lastProductsChanged: number | null;
+  lastClosedRoundSalesTotal: number | null;
+}
 
 export interface DemandOverride {
   productId: string;
@@ -66,11 +85,27 @@ const ROUND_INCLUDE = { prices: { include: { product: true, exchangeProduct: tru
 
 /** Бизнес-логика ценовых раундов. Никогда не вызывает write-операции iiko. */
 export class RoundsService {
+  private transitionState: RoundTransitionState = {
+    lastStartedAt: null,
+    lastCompletedAt: null,
+    lastError: null,
+    lastErrorAt: null,
+    lastClosedRoundKey: null,
+    lastCreatedRoundKey: null,
+    lastProductsChanged: null,
+    lastClosedRoundSalesTotal: null,
+  };
+
   constructor(
     private readonly prisma: PrismaClient,
     private readonly env: AppEnv,
     private readonly audit: AuditService,
+    private readonly logger?: RoundsLogger,
   ) {}
+
+  getTransitionState(): RoundTransitionState {
+    return { ...this.transitionState };
+  }
 
   private get interval(): number {
     return this.env.PRICE_ROUND_INTERVAL_MINUTES;
@@ -131,18 +166,19 @@ export class RoundsService {
       const override = overrides.get(product.id);
       const salesQuantity = override?.salesQuantity ?? salesByProduct.get(product.id) ?? 0;
       const demandScore = calculateExchangeDemandScore(salesQuantity, averageSales);
-      const levelDelta = calculatePriceLevelDelta(salesQuantity, averageSales);
+      const levelDelta = calculatePriceLevelDelta(salesQuantity);
       const currentLevel = product.priceLevelPercent;
       const nextLevel = clampPriceLevel(currentLevel + levelDelta);
-      const nextPrice = levelDelta === 0
-        ? product.currentPrice
-        : calculatePriceFromLevel({
-            originalPrice: product.originalPrice,
-            minPrice: product.minPrice,
-            maxPrice: product.maxPrice,
-            priceStep: product.priceStep,
-            priceLevelPercent: nextLevel,
-          });
+      const nextPrice =
+        levelDelta === 0
+          ? product.currentPrice
+          : calculatePriceFromLevel({
+              originalPrice: product.originalPrice,
+              minPrice: product.minPrice,
+              maxPrice: product.maxPrice,
+              priceStep: product.priceStep,
+              priceLevelPercent: nextLevel,
+            });
       const discount = calculateDiscountPercent(product.originalPrice.toString(), nextPrice);
       const roundChange = changePercent(product.currentPrice, nextPrice);
 
@@ -162,8 +198,18 @@ export class RoundsService {
         salesQuantity: String(salesQuantity),
         demandScore: (override?.demandScore ?? demandScore).toString(),
         changePercent: roundChange.toString(),
-        calculationInput: { algorithm: 'discrete-price-levels-v1', currentLevel, levelDelta, salesQuantity, averageSales } as Prisma.InputJsonValue,
-        calculationResult: { nextLevel, nextPrice: nextPrice.toString(), minPriceHardFloor: true } as Prisma.InputJsonValue,
+        calculationInput: {
+          algorithm: 'discrete-price-levels-v1',
+          currentLevel,
+          levelDelta,
+          salesQuantity,
+          averageSales,
+        } as Prisma.InputJsonValue,
+        calculationResult: {
+          nextLevel,
+          nextPrice: nextPrice.toString(),
+          minPriceHardFloor: true,
+        } as Prisma.InputJsonValue,
         status: 'SIMULATED' as RoundStatus,
       };
     });
@@ -215,95 +261,248 @@ export class RoundsService {
     }
   }
 
-  /** Closes the active window and publishes exactly one next window. */
+  /**
+   * Закрывает завершившиеся раунды и публикует раунд текущего окна с ценами,
+   * пересчитанными по фактическим продажам закрытого раунда.
+   *
+   * Свойства:
+   * - идемпотентность: как только завершившийся раунд получил статус CLOSED,
+   *   повторный вызов ничего не пересчитывает и возвращает текущий раунд;
+   * - раунд текущего окна, уже созданный чтением (carry-over), не блокирует
+   *   переход: его позиции пересчитываются на месте;
+   * - всё выполняется в одной транзакции под advisory lock, поэтому два
+   *   процесса (web + cron) не создают дубликаты и не применяют уровень дважды.
+   */
   async transitionRound(now = new Date()): Promise<RoundWithPrices | null> {
     const organization = await this.getSelectedOrganization();
-    const window = getCurrentRound(now, this.env.APP_TIMEZONE, this.interval);
-    return this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('exchange-round-transition'))`;
-      const active = await tx.priceRound.findFirst({
-        where: { organizationId: organization.id, status: 'PUBLISHED', endsAt: { lte: now } },
-        orderBy: { endsAt: 'desc' },
-        include: ROUND_INCLUDE,
-      });
-      const nextWindow = window;
-      const existing = await tx.priceRound.findUnique({ where: { roundKey: nextWindow.roundKey }, include: ROUND_INCLUDE });
-      if (existing) return existing;
-      if (!active) return null;
-      const products = await tx.exchangeProduct.findMany({ where: { isActive: true }, orderBy: { name: 'asc' } });
-      const sales = await tx.exchangeSale.findMany({ where: { roundId: active.id, exchangeProductId: { not: null } } });
-      const quantities = new Map<string, number>();
-      for (const sale of sales) quantities.set(sale.exchangeProductId!, (quantities.get(sale.exchangeProductId!) ?? 0) + sale.quantity);
-      const average = products.reduce((sum, product) => sum + (quantities.get(product.id) ?? 0), 0) / Math.max(products.length, 1);
-      const rows = products.map((product) => {
-        const quantity = quantities.get(product.id) ?? 0;
-        const demandScore = calculateExchangeDemandScore(quantity, average);
-        const levelDelta = calculatePriceLevelDelta(quantity, average);
-        const nextLevel = quantity < 2 ? product.priceLevelPercent : clampPriceLevel(product.priceLevelPercent + levelDelta);
-        const nextPrice = quantity < 2
-          ? product.currentPrice
-          : calculatePriceFromLevel({
-              originalPrice: product.originalPrice,
-              minPrice: product.minPrice,
-              maxPrice: product.maxPrice,
-              priceStep: product.priceStep,
-              priceLevelPercent: nextLevel,
-            });
-        const discount = calculateDiscountPercent(product.originalPrice.toString(), nextPrice);
-        return { product, quantity, nextPrice, discount, demandScore, nextLevel, levelDelta };
-      });
-      await tx.priceRound.update({ where: { id: active.id }, data: { status: 'CLOSED' } });
-      const created = await tx.priceRound.create({
-        data: {
-          organizationId: organization.id,
-          roundKey: nextWindow.roundKey,
-          startsAt: nextWindow.startsAt,
-          endsAt: nextWindow.endsAt,
+    const nextWindow = getCurrentRound(now, this.env.APP_TIMEZONE, this.interval);
+    const startedAt = new Date();
+    this.transitionState = {
+      ...this.transitionState,
+      lastStartedAt: startedAt.toISOString(),
+    };
+
+    try {
+      const result = await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('exchange-round-transition'))`;
+        const endedRounds = await tx.priceRound.findMany({
+          where: { organizationId: organization.id, status: 'PUBLISHED', endsAt: { lte: now } },
+          orderBy: { endsAt: 'desc' },
+          include: ROUND_INCLUDE,
+        });
+        const closedRound = endedRounds[0] ?? null;
+        const existing = await tx.priceRound.findUnique({
+          where: { roundKey: nextWindow.roundKey },
+          include: ROUND_INCLUDE,
+        });
+        // Нечего закрывать — переход уже выполнен (идемпотентность).
+        if (!closedRound) return { round: existing, closedRound: null, rows: [], salesTotal: 0 };
+
+        this.logger?.info({
+          event: 'round_transition_started',
+          activeRoundId: closedRound.id,
+          roundKey: closedRound.roundKey,
+          endsAt: closedRound.endsAt.toISOString(),
+          serverNow: now.toISOString(),
           timezone: this.env.APP_TIMEZONE,
-          status: 'PUBLISHED',
-          algorithmVersion: PRICE_ALGORITHM_VERSION,
-          triggerSource: 'CRON',
-          publishedAt: now,
-          prices: {
-            create: rows.map(({ product, quantity, nextPrice, discount, demandScore, nextLevel, levelDelta }) => ({
-              exchangeProductId: product.id,
-              price: nextPrice,
-              previousPrice: product.currentPrice,
-              calculatedPrice: nextPrice,
-              publishedPrice: nextPrice,
-              minPrice: product.minPrice,
-              maxPrice: product.maxPrice,
-              priceStep: product.priceStep,
-              originalPrice: product.originalPrice,
-              priceLevelPercent: nextLevel,
-              discountPercent: discount,
-              selectedDiscountPercent: discount,
-              actualDiscountPercent: discount,
-              soldQuantity: quantity,
+        });
+
+        const products = await tx.exchangeProduct.findMany({
+          where: { isActive: true },
+          orderBy: { name: 'asc' },
+        });
+        // Спрос закрытого раунда: именно SUM(quantity), а не COUNT(rows).
+        const grouped = await tx.exchangeSale.groupBy({
+          by: ['exchangeProductId'],
+          where: { roundId: closedRound.id, exchangeProductId: { not: null } },
+          _sum: { quantity: true },
+        });
+        const quantities = new Map<string, number>();
+        for (const row of grouped) {
+          if (row.exchangeProductId) quantities.set(row.exchangeProductId, row._sum.quantity ?? 0);
+        }
+        const salesTotal = products.reduce(
+          (sum, product) => sum + (quantities.get(product.id) ?? 0),
+          0,
+        );
+        const average = salesTotal / Math.max(products.length, 1);
+
+        const rows = products.map((product) => {
+          const quantity = quantities.get(product.id) ?? 0;
+          const demandScore = calculateExchangeDemandScore(quantity, average);
+          const levelDelta = calculatePriceLevelDelta(quantity);
+          const currentLevel = product.priceLevelPercent;
+          const nextLevel = clampPriceLevel(currentLevel + levelDelta);
+          const nextPrice =
+            nextLevel === currentLevel
+              ? toMoney(product.currentPrice.toString())
+              : calculatePriceFromLevel({
+                  originalPrice: product.originalPrice,
+                  minPrice: product.minPrice,
+                  maxPrice: product.maxPrice,
+                  priceStep: product.priceStep,
+                  priceLevelPercent: nextLevel,
+                });
+          const discount = calculateDiscountPercent(product.originalPrice.toString(), nextPrice);
+          this.logger?.info({
+            event: 'round_product_calculated',
+            productId: product.id,
+            productName: product.name,
+            closedRoundQuantity: quantity,
+            previousLevel: currentLevel,
+            nextLevel,
+            previousPrice: product.currentPrice.toString(),
+            nextPrice: nextPrice.toString(),
+          });
+          return { product, quantity, nextPrice, discount, demandScore, nextLevel, levelDelta };
+        });
+
+        const priceRows = rows.map(
+          ({ product, quantity, nextPrice, discount, demandScore, nextLevel, levelDelta }) => ({
+            exchangeProductId: product.id,
+            price: nextPrice.toString(),
+            previousPrice: product.currentPrice.toString(),
+            calculatedPrice: nextPrice.toString(),
+            publishedPrice: nextPrice.toString(),
+            minPrice: product.minPrice.toString(),
+            maxPrice: product.maxPrice.toString(),
+            priceStep: product.priceStep.toString(),
+            originalPrice: product.originalPrice.toString(),
+            priceLevelPercent: nextLevel,
+            discountPercent: discount.toString(),
+            selectedDiscountPercent: discount.toString(),
+            actualDiscountPercent: discount.toString(),
+            soldQuantity: String(quantity),
+            salesQuantity: String(quantity),
+            demandScore: demandScore.toString(),
+            changePercent: changePercent(product.currentPrice, nextPrice).toString(),
+            calculationInput: {
+              algorithm: 'discrete-price-levels-v1',
+              closedRoundId: closedRound.id,
+              closedRoundKey: closedRound.roundKey,
+              closedRoundQuantity: quantity,
+              currentLevel: product.priceLevelPercent,
+              levelDelta,
               salesQuantity: quantity,
-              demandScore,
-              changePercent: changePercent(product.currentPrice, nextPrice),
-              calculationInput: { algorithm: 'discrete-price-levels-v1', currentLevel: product.priceLevelPercent, levelDelta, salesQuantity: quantity, averageSales: average } as Prisma.InputJsonValue,
-              calculationResult: { nextLevel, nextPrice: nextPrice.toString(), minPriceHardFloor: true } as Prisma.InputJsonValue,
-              status: 'PUBLISHED' as RoundStatus,
-            })),
-          },
-        },
-        include: ROUND_INCLUDE,
+              averageSales: average,
+            } as Prisma.InputJsonValue,
+            calculationResult: {
+              nextLevel,
+              nextPrice: nextPrice.toString(),
+              minPriceHardFloor: true,
+            } as Prisma.InputJsonValue,
+            status: 'PUBLISHED' as RoundStatus,
+          }),
+        );
+
+        for (const ended of endedRounds) {
+          await tx.priceRound.update({ where: { id: ended.id }, data: { status: 'CLOSED' } });
+        }
+
+        let round: RoundWithPrices;
+        if (existing) {
+          // Раунд текущего окна уже создан чтением или симуляцией: заменяем его
+          // позиции пересчитанными и публикуем — carry-over не должен «съедать» переход.
+          await tx.roundPrice.deleteMany({ where: { roundId: existing.id } });
+          round = await tx.priceRound.update({
+            where: { id: existing.id },
+            data: {
+              status: 'PUBLISHED',
+              publishedAt: now,
+              startsAt: nextWindow.startsAt,
+              endsAt: nextWindow.endsAt,
+              timezone: this.env.APP_TIMEZONE,
+              algorithmVersion: PRICE_ALGORITHM_VERSION,
+              prices: { create: priceRows },
+            },
+            include: ROUND_INCLUDE,
+          });
+        } else {
+          round = await tx.priceRound.create({
+            data: {
+              organizationId: organization.id,
+              roundKey: nextWindow.roundKey,
+              startsAt: nextWindow.startsAt,
+              endsAt: nextWindow.endsAt,
+              timezone: this.env.APP_TIMEZONE,
+              status: 'PUBLISHED',
+              algorithmVersion: PRICE_ALGORITHM_VERSION,
+              triggerSource: 'CRON',
+              publishedAt: now,
+              prices: { create: priceRows },
+            },
+            include: ROUND_INCLUDE,
+          });
+        }
+
+        for (const row of rows) {
+          await tx.exchangeProduct.update({
+            where: { id: row.product.id },
+            data: {
+              currentPrice: row.nextPrice.toString(),
+              priceLevelPercent: row.nextLevel,
+              currentDiscountPercent: row.discount.toString(),
+              actualDiscountPercent: row.discount.toString(),
+            },
+          });
+        }
+
+        return { round, closedRound, rows, salesTotal };
       });
-      for (const row of rows) {
-        await tx.exchangeProduct.update({
-          where: { id: row.product.id },
-          data: {
-            currentPrice: row.nextPrice,
-            priceLevelPercent: row.nextLevel,
-            currentDiscountPercent: row.discount,
-            actualDiscountPercent: row.discount,
+
+      if (result.closedRound && result.round) {
+        const productsChanged = result.rows.filter(
+          (row) => row.nextLevel !== row.product.priceLevelPercent,
+        ).length;
+        this.transitionState = {
+          lastStartedAt: startedAt.toISOString(),
+          lastCompletedAt: new Date().toISOString(),
+          lastError: null,
+          lastErrorAt: this.transitionState.lastErrorAt,
+          lastClosedRoundKey: result.closedRound.roundKey,
+          lastCreatedRoundKey: result.round.roundKey,
+          lastProductsChanged: productsChanged,
+          lastClosedRoundSalesTotal: result.salesTotal,
+        };
+        this.logger?.info({
+          event: 'round_transition_completed',
+          closedRoundId: result.closedRound.id,
+          newRoundId: result.round.id,
+          newRoundKey: result.round.roundKey,
+          closedRoundSalesTotal: result.salesTotal,
+          productsChanged,
+        });
+        await this.audit.log({
+          action: 'ROUND_PUBLISHED',
+          actorType: 'CRON',
+          organizationId: organization.id,
+          entityType: 'PriceRound',
+          entityId: result.round.id,
+          summary: `Переход раунда: ${result.closedRound.roundKey} → ${result.round.roundKey}`,
+          metadata: {
+            closedRoundKey: result.closedRound.roundKey,
+            newRoundKey: result.round.roundKey,
+            closedRoundSalesTotal: result.salesTotal,
+            productsChanged,
           },
         });
       }
-      return created;
-    });
+
+      return result.round;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.transitionState = {
+        ...this.transitionState,
+        lastError: message.slice(0, 500),
+        lastErrorAt: new Date().toISOString(),
+      };
+      this.logger?.error({
+        event: 'round_transition_failed',
+        message,
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      throw error;
+    }
   }
 
   async listRounds(params: { limit?: number; status?: RoundStatus } = {}) {
@@ -521,10 +720,6 @@ export class RoundsService {
       })),
     };
   }
-}
-
-function clampPriceLevel(level: number): number {
-  return Math.max(-30, Math.min(70, Math.round(level / 10) * 10));
 }
 
 function isUniqueViolation(error: unknown): boolean {

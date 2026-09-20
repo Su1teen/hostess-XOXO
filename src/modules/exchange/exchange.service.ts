@@ -13,8 +13,21 @@ import { getCanonicalPriceLevelPercent } from '../../services/price-engine.servi
 const PAUSED_SETTING = 'exchange.paused';
 const ROUND_INCLUDE = { prices: { include: { exchangeProduct: true } } } as const;
 
+/** Минимальный контракт перехода раундов (реализуется RoundsService). */
+export interface RoundTransitioner {
+  transitionRound(now?: Date): Promise<{ id: string; startsAt: Date; endsAt: Date } | null>;
+}
+
+export interface ExchangeLogger {
+  error(payload: Record<string, unknown>, message?: string): void;
+}
+
 export class ExchangeService {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly transitioner?: RoundTransitioner,
+    private readonly logger?: ExchangeLogger,
+  ) {}
 
   /**
    * Идемпотентная инициализация каталога биржи (без iiko).
@@ -49,7 +62,10 @@ export class ExchangeService {
           startPrice: product.minPrice,
           currentPrice: product.minPrice,
           currentDiscountPercent: initialDiscount.toFixed(4),
-          priceLevelPercent: getCanonicalPriceLevelPercent({ originalPrice: product.originalPrice, currentPrice: product.minPrice }),
+          priceLevelPercent: getCanonicalPriceLevelPercent({
+            originalPrice: product.originalPrice,
+            currentPrice: product.minPrice,
+          }),
           actualDiscountPercent: initialDiscount.toFixed(4),
           minPrice: product.minPrice,
           maxPrice: maxPrice.toFixed(2),
@@ -98,7 +114,10 @@ export class ExchangeService {
               calculatedPrice: product.currentPrice,
               publishedPrice: product.currentPrice,
               originalPrice: product.originalPrice,
-              priceLevelPercent: getCanonicalPriceLevelPercent({ originalPrice: product.originalPrice, currentPrice: product.currentPrice }),
+              priceLevelPercent: getCanonicalPriceLevelPercent({
+                originalPrice: product.originalPrice,
+                currentPrice: product.currentPrice,
+              }),
               discountPercent: calculateDiscountPercent(
                 product.originalPrice.toString(),
                 product.currentPrice.toString(),
@@ -151,6 +170,36 @@ export class ExchangeService {
       orderBy: { startsAt: 'desc' },
     });
     if (active) return active;
+
+    // Окно сменилось. Сначала штатный переход (закрытие раунда + пересчёт по
+    // продажам), и только если переходить нечего — carry-over ниже. Без этого первое
+    // же чтение после границы раунда создавало раунд с теми же ценами и продажи
+    // закрытого раунда никогда не применялись.
+    if (this.transitioner) {
+      try {
+        const advanced = await this.transitioner.transitionRound(now);
+        if (advanced && advanced.startsAt <= now && advanced.endsAt > now) {
+          const published = await this.prisma.priceRound.findFirst({
+            where: {
+              id: advanced.id,
+              status: 'PUBLISHED',
+              prices: { some: { exchangeProductId: { not: null } } },
+            },
+          });
+          if (published) return published;
+        }
+      } catch (error) {
+        // Не валим табло из-за ошибки перехода: завершившийся раунд остаётся
+        // PUBLISHED, и следующая попытка (cron/чтение) пересчитает раунд на месте.
+        this.logger?.error(
+          {
+            event: 'exchange_round_transition_failed',
+            message: error instanceof Error ? error.message : String(error),
+          },
+          'не удалось выполнить переход раунда при чтении',
+        );
+      }
+    }
 
     const window = getCurrentRound(now, EXCHANGE_TIMEZONE, EXCHANGE_INTERVAL_MINUTES);
     const existing = await this.prisma.priceRound.findUnique({

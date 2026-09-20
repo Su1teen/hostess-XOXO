@@ -13,6 +13,7 @@ describe('public exchange API', () => {
     app.decorate('env', env as never);
     app.decorate('services', {
       rounds: { getCurrentPublishedRound: vi.fn(async () => null) },
+      exchange: { ensureCurrentRound: vi.fn(async () => null) },
     } as never);
     app.decorate('prisma', {
       exchangeProduct: {
@@ -50,6 +51,7 @@ describe('public exchange API', () => {
     app.decorate('env', env as never);
     app.decorate('services', {
       rounds: { getCurrentPublishedRound: vi.fn(async () => null) },
+      exchange: { ensureCurrentRound: vi.fn(async () => null) },
     } as never);
     app.decorate('prisma', {
       exchangeProduct: {

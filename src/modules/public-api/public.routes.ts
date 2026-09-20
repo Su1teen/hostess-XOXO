@@ -66,6 +66,10 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     app.prisma.exchangeProduct.findMany({ where: { isActive: true }, orderBy: { name: 'asc' } });
 
   const buildPayload = async () => {
+    // Гарантирует, что раунд текущего окна опубликован (и что завершившийся раунд
+    // закрыт с пересчётом цен по продажам) до чтения. Идемпотентно и не пересчитывает
+    // цены, когда закрывать нечего.
+    await app.services.exchange.ensureCurrentRound();
     const round = await app.services.rounds.getCurrentPublishedRound();
     return {
       generatedAt: new Date().toISOString(),
@@ -113,6 +117,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     `${API_PREFIX}/public/products`,
     { ...publicOptions, schema: { tags: ['Public'] } },
     async () => {
+      await app.services.exchange.ensureCurrentRound();
       const [products, round] = await Promise.all([
         app.prisma.exchangeProduct.findMany({
           where: { isActive: true },

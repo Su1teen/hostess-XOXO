@@ -18,6 +18,7 @@ import { webhookRoutes } from './modules/webhooks/webhooks.routes.js';
 import { authPlugin } from './plugins/auth.js';
 import { buildLoggerOptions } from './plugins/logger.js';
 import { prismaPlugin } from './plugins/prisma.js';
+import { schedulerPlugin } from './plugins/scheduler.js';
 import { securityPlugin } from './plugins/security.js';
 import { swaggerPlugin } from './plugins/swagger.js';
 
@@ -48,6 +49,7 @@ export async function buildApp(env: AppEnv = getEnv()): Promise<FastifyInstance>
   await app.register(authPlugin);
   await app.register(prismaPlugin);
   await app.register(swaggerPlugin);
+  await app.register(schedulerPlugin);
 
   await app.register(healthRoutes);
   await app.register(publicRoutes);

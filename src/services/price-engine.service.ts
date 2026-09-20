@@ -28,11 +28,18 @@ export function calculateDemandScore(quantity: MoneyInput, average: MoneyInput):
 /** Минимальное количество продаж, при котором спрос считается активным. */
 export const EXCHANGE_MIN_SALES_FOR_DEMAND = 2;
 
+/** Шаг уровня: за один раунд цена двигается ровно на 10 процентных пунктов. */
+export const PRICE_LEVEL_STEP = 10;
+
 export const PRICE_LEVELS = [-30, -20, -10, 0, 10, 20, 30, 40, 50, 60, 70] as const;
 export type PriceLevelPercent = (typeof PRICE_LEVELS)[number];
 
 export function normalizePriceLevelPercent(value: unknown): PriceLevelPercent {
-  if (typeof value !== 'number' || !Number.isInteger(value) || !PRICE_LEVELS.includes(value as PriceLevelPercent)) {
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    !PRICE_LEVELS.includes(value as PriceLevelPercent)
+  ) {
     throw validationError('priceLevelPercent должен быть одним из уровней -30..70 с шагом 10');
   }
   return value as PriceLevelPercent;
@@ -118,14 +125,27 @@ export function calculateExchangeDemandScore(quantity: MoneyInput, average: Mone
   return sales.minus(avg).div(Decimal.max(avg, 1)).clamp(0, 1);
 }
 
-export function calculatePriceLevelDelta(quantity: MoneyInput, average: MoneyInput): 0 | 10 | 20 | 30 {
-  const sales = toDecimal(quantity);
-  if (sales.lt(EXCHANGE_MIN_SALES_FOR_DEMAND)) return 0;
-  const ratio = sales.div(Decimal.max(toDecimal(average), 1));
-  if (ratio.lt(1)) return 0;
-  if (ratio.lt(1.5)) return 10;
-  if (ratio.lt(2)) return 20;
-  return 30;
+/**
+ * Изменение уровня для следующего раунда по продажам закрытого раунда.
+ *
+ * Q >= EXCHANGE_MIN_SALES_FOR_DEMAND -> +10 (спрос подтверждён)
+ * Q <  EXCHANGE_MIN_SALES_FOR_DEMAND -> 0  (уровень сохраняется)
+ *
+ * Сравнения со средним спросом здесь нет: продажи товара не должны обнуляться
+ * из-за продаж соседних позиций, а уровень двигается детерминированно на один
+ * шаг за раунд.
+ */
+export function calculatePriceLevelDelta(quantity: MoneyInput): 0 | 10 {
+  return toDecimal(quantity).lt(EXCHANGE_MIN_SALES_FOR_DEMAND) ? 0 : PRICE_LEVEL_STEP;
+}
+
+/** Ограничивает уровень канониническим диапазоном [-30, +70]. */
+export function clampPriceLevel(level: number): PriceLevelPercent {
+  const min: PriceLevelPercent = -30;
+  const max: PriceLevelPercent = 70;
+  if (level <= min) return min;
+  if (level >= max) return max;
+  return normalizePriceLevelPercent(level);
 }
 
 export interface PriceCalculationRequest {

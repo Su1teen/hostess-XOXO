@@ -5,6 +5,7 @@ import {
   calculateNextPrice,
   calculatePriceFromLevel,
   calculatePriceLevelDelta,
+  clampPriceLevel,
   getCanonicalPriceLevelPercent,
   normalizePriceLevelPercent,
   PRICE_LEVELS,
@@ -31,10 +32,26 @@ describe('дискретные уровни цены', () => {
     expect(PRICE_LEVELS).toEqual([-30, -20, -10, 0, 10, 20, 30, 40, 50, 60, 70]);
     for (const level of PRICE_LEVELS) {
       expect(normalizePriceLevelPercent(level)).toBe(level);
-      expect(calculatePriceFromLevel({ originalPrice: 1450, minPrice: 990, maxPrice: 2200, priceStep: 50, priceLevelPercent: level })).toBeDefined();
+      expect(
+        calculatePriceFromLevel({
+          originalPrice: 1450,
+          minPrice: 990,
+          maxPrice: 2200,
+          priceStep: 50,
+          priceLevelPercent: level,
+        }),
+      ).toBeDefined();
     }
     for (const level of [-35, 5, 15, 80, 10.5]) {
-      expect(() => calculatePriceFromLevel({ originalPrice: 1450, minPrice: 990, maxPrice: 2200, priceStep: 50, priceLevelPercent: level })).toThrow(AppError);
+      expect(() =>
+        calculatePriceFromLevel({
+          originalPrice: 1450,
+          minPrice: 990,
+          maxPrice: 2200,
+          priceStep: 50,
+          priceLevelPercent: level,
+        }),
+      ).toThrow(AppError);
     }
   });
 
@@ -97,13 +114,16 @@ describe('дискретные уровни цены', () => {
 
   it('переход между раундами меняет уровень только на разрешённые значения', () => {
     const currentLevel = -30;
-    const delta = calculatePriceLevelDelta(2, 2); // → 10
+    const delta = calculatePriceLevelDelta(2); // → 10
     const nextLevel = Math.max(-30, Math.min(70, Math.round((currentLevel + delta) / 10) * 10));
     expect(nextLevel).toBe(-20);
     expect(PRICE_LEVELS).toContain(nextLevel);
     // Переход с -20 на -10
-    const nextDelta = calculatePriceLevelDelta(2, 2);
-    const nextNextLevel = Math.max(-30, Math.min(70, Math.round((nextLevel + nextDelta) / 10) * 10));
+    const nextDelta = calculatePriceLevelDelta(2);
+    const nextNextLevel = Math.max(
+      -30,
+      Math.min(70, Math.round((nextLevel + nextDelta) / 10) * 10),
+    );
     expect(nextNextLevel).toBe(-10);
     expect(PRICE_LEVELS).toContain(nextNextLevel);
   });
@@ -123,7 +143,7 @@ describe('Bud: minPrice и canonical -30%', () => {
   });
 
   it('Bud -30% raw price = 1533', () => {
-    const rawPrice = BUD_ORIGINAL * 0.70;
+    const rawPrice = BUD_ORIGINAL * 0.7;
     expect(rawPrice).toBe(1533);
   });
 
@@ -150,7 +170,10 @@ describe('Bud: minPrice и canonical -30%', () => {
   });
 
   it('Bud initial priceLevelPercent = -30', () => {
-    const level = getCanonicalPriceLevelPercent({ originalPrice: BUD_ORIGINAL, currentPrice: BUD_MIN_PRICE });
+    const level = getCanonicalPriceLevelPercent({
+      originalPrice: BUD_ORIGINAL,
+      currentPrice: BUD_MIN_PRICE,
+    });
     expect(level).toBe(-30);
   });
 
@@ -168,14 +191,20 @@ describe('Bud: minPrice и canonical -30%', () => {
   });
 
   it('Bud canonical ставка -30% при currentPrice = 1550', () => {
-    const level = getCanonicalPriceLevelPercent({ originalPrice: BUD_ORIGINAL, currentPrice: 1550 });
+    const level = getCanonicalPriceLevelPercent({
+      originalPrice: BUD_ORIGINAL,
+      currentPrice: 1550,
+    });
     expect(level).toBe(-30);
     expect(level).toBeLessThanOrEqual(0);
   });
 
   it('Bud не показывает положительную ставку при цене ниже originalPrice', () => {
     for (const current of [990, 1000, 1550, 1800, 2000, 2189]) {
-      const level = getCanonicalPriceLevelPercent({ originalPrice: BUD_ORIGINAL, currentPrice: current });
+      const level = getCanonicalPriceLevelPercent({
+        originalPrice: BUD_ORIGINAL,
+        currentPrice: current,
+      });
       expect(level).toBeLessThanOrEqual(0);
     }
   });
@@ -183,24 +212,94 @@ describe('Bud: minPrice и canonical -30%', () => {
 
 describe('дискретные уровни цены — дополнительные проверки', () => {
   it('использует minPrice как hard floor и maxPrice как ceiling', () => {
-    expect(calculatePriceFromLevel({ originalPrice: 1450, minPrice: 1000, maxPrice: 2200, priceStep: 50, priceLevelPercent: -30 }).toString()).toBe('1000');
-    expect(calculatePriceFromLevel({ originalPrice: 1450, minPrice: 990, maxPrice: 2000, priceStep: 50, priceLevelPercent: 70 }).toString()).toBe('2000');
+    expect(
+      calculatePriceFromLevel({
+        originalPrice: 1450,
+        minPrice: 1000,
+        maxPrice: 2200,
+        priceStep: 50,
+        priceLevelPercent: -30,
+      }).toString(),
+    ).toBe('1000');
+    expect(
+      calculatePriceFromLevel({
+        originalPrice: 1450,
+        minPrice: 990,
+        maxPrice: 2000,
+        priceStep: 50,
+        priceLevelPercent: 70,
+      }).toString(),
+    ).toBe('2000');
   });
 
   it('переходит с -30 на -20 после подтверждённого спроса', () => {
     const currentLevel = -30;
-    const nextLevel = currentLevel + calculatePriceLevelDelta(2, 2);
+    const nextLevel = currentLevel + calculatePriceLevelDelta(2);
     expect(nextLevel).toBe(-20);
-    expect(calculatePriceFromLevel({ originalPrice: 1000, minPrice: 700, maxPrice: 2000, priceStep: 50, priceLevelPercent: currentLevel }).toString()).toBe('700');
-    expect(calculatePriceFromLevel({ originalPrice: 1000, minPrice: 700, maxPrice: 2000, priceStep: 50, priceLevelPercent: nextLevel }).toString()).toBe('800');
+    expect(
+      calculatePriceFromLevel({
+        originalPrice: 1000,
+        minPrice: 700,
+        maxPrice: 2000,
+        priceStep: 50,
+        priceLevelPercent: currentLevel,
+      }).toString(),
+    ).toBe('700');
+    expect(
+      calculatePriceFromLevel({
+        originalPrice: 1000,
+        minPrice: 700,
+        maxPrice: 2000,
+        priceStep: 50,
+        priceLevelPercent: nextLevel,
+      }).toString(),
+    ).toBe('800');
   });
 
-  it('расчитывает рост уровнями по подтверждённому спросу', () => {
-    expect(calculatePriceLevelDelta(1, 1)).toBe(0);
-    expect(calculatePriceLevelDelta(2, 2)).toBe(10);
-    expect(calculatePriceLevelDelta(3, 2)).toBe(20);
-    expect(calculatePriceLevelDelta(4, 2)).toBe(30);
-    expect(calculatePriceLevelDelta(1, 0)).toBe(0);
+  it('двигает уровень ровно на один шаг при подтверждённом спросе', () => {
+    // Шаг всегда 10 п.п.: количество продаж не ускоряет рост, а средний спрос
+    // по каталогу больше не может обнулить delta отдельного товара.
+    expect(calculatePriceLevelDelta(0)).toBe(0);
+    expect(calculatePriceLevelDelta(1)).toBe(0);
+    expect(calculatePriceLevelDelta(2)).toBe(10);
+    expect(calculatePriceLevelDelta(5)).toBe(10);
+    expect(calculatePriceLevelDelta(10)).toBe(10);
+    expect(calculatePriceLevelDelta(100)).toBe(10);
+  });
+
+  it('clampPriceLevel держится в -30..+70', () => {
+    expect(clampPriceLevel(-40)).toBe(-30);
+    expect(clampPriceLevel(-30)).toBe(-30);
+    expect(clampPriceLevel(-20)).toBe(-20);
+    expect(clampPriceLevel(70)).toBe(70);
+    expect(clampPriceLevel(80)).toBe(70);
+  });
+});
+
+describe('Bud: 10 продаж за раунд → -20% / 1750 ₸', () => {
+  const BUD = { originalPrice: 2190, minPrice: 1550, maxPrice: 3300, priceStep: 50 };
+
+  it('уровень -30 → -20 при 10 продажах закрытого раунда', () => {
+    expect(clampPriceLevel(-30 + calculatePriceLevelDelta(10))).toBe(-20);
+  });
+
+  it('цена уровня -20 считается от originalPrice: 2190 * 0.8 = 1752 → 1750', () => {
+    const price = calculatePriceFromLevel({ ...BUD, priceLevelPercent: -20 });
+    expect(Number(price.toString())).toBe(1750);
+    expect(Number(price.toString())).not.toBe(1550);
+    expect(Number(price.toString())).not.toBe(990);
+  });
+
+  it('без продаж уровень и цена не меняются', () => {
+    expect(clampPriceLevel(-30 + calculatePriceLevelDelta(0))).toBe(-30);
+    expect(Number(calculatePriceFromLevel({ ...BUD, priceLevelPercent: -30 }).toString())).toBe(
+      1550,
+    );
+  });
+
+  it('1 продажа не подтверждает спрос, 2 — подтверждают', () => {
+    expect(clampPriceLevel(-30 + calculatePriceLevelDelta(1))).toBe(-30);
+    expect(clampPriceLevel(-30 + calculatePriceLevelDelta(2))).toBe(-20);
   });
 });
 
