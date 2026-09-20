@@ -35,6 +35,11 @@ export interface BartenderProductDto {
   updatedAt: string;
 }
 
+/** Минимальный логгер: только структурированные события без PIN/токенов. */
+export interface BartenderLogger {
+  info(payload: Record<string, unknown>, message?: string): void;
+}
+
 /**
  * Рабочая логика панели бармена: просмотр canonical price и продажи текущего раунда.
  * Каталог берётся только из exchange_products, iiko здесь не участвует.
@@ -44,6 +49,7 @@ export class BartenderService {
     private readonly prisma: PrismaClient,
     private readonly exchange: ExchangeService,
     private readonly audit: AuditService,
+    private readonly logger?: BartenderLogger,
   ) {}
 
   async listProducts(): Promise<{
@@ -140,6 +146,18 @@ export class BartenderService {
       metadata: { roundId: round.id, salesQuantity: quantity, absolute: true },
     });
 
+    this.logger?.info({
+      event: 'bartender_sale_recorded',
+      productId,
+      roundId: round.id,
+      roundKey: round.roundKey,
+      absolute: true,
+      quantityDelta: null,
+      roundQuantityAfter: result.sale.quantity,
+      priceAtSale: toNumber(result.sale.priceAtSale.toString()),
+      priceLevelPercentAtSale: result.sale.priceLevelPercentAtSale,
+    });
+
     return {
       productId,
       roundId: round.id,
@@ -157,7 +175,15 @@ export class BartenderService {
     quantity: number,
     direction: 1 | -1,
     actor: BartenderActor,
-  ): Promise<{ productId: string; roundId: string; salesQuantity: number; quantity?: number; priceAtSale?: number; discountPercentAtSale?: number; roundEndsAt?: string }> {
+  ): Promise<{
+    productId: string;
+    roundId: string;
+    salesQuantity: number;
+    quantity?: number;
+    priceAtSale?: number;
+    discountPercentAtSale?: number;
+    roundEndsAt?: string;
+  }> {
     if (!Number.isSafeInteger(quantity) || quantity <= 0) {
       throw validationError('quantity должен быть положительным целым числом');
     }
@@ -221,13 +247,32 @@ export class BartenderService {
       metadata: { roundId: round.id, salesQuantity: result.sale.quantity },
     });
 
+    this.logger?.info({
+      event: 'bartender_sale_recorded',
+      productId,
+      roundId: round.id,
+      roundKey: round.roundKey,
+      absolute: false,
+      quantityDelta: direction * quantity,
+      roundQuantityAfter: result.sale.quantity,
+      priceAtSale: toNumber(result.sale.priceAtSale.toString()),
+      priceLevelPercentAtSale: result.sale.priceLevelPercentAtSale,
+    });
+
     return {
       productId,
       roundId: round.id,
       salesQuantity: result.sale.quantity,
       quantity: result.sale.quantity,
       priceAtSale: toNumber(result.sale.priceAtSale.toString()),
-      discountPercentAtSale: toNumber((result.sale.discountPercentAtSale ?? result.sale.actualDiscountPercentAtSale ?? result.sale.selectedDiscountPercentAtSale ?? 0).toString()),
+      discountPercentAtSale: toNumber(
+        (
+          result.sale.discountPercentAtSale ??
+          result.sale.actualDiscountPercentAtSale ??
+          result.sale.selectedDiscountPercentAtSale ??
+          0
+        ).toString(),
+      ),
       roundEndsAt: round.endsAt.toISOString(),
     };
   }
@@ -312,4 +357,3 @@ function toProductDto(product: ExchangeProduct, salesQuantity: number): Bartende
     updatedAt: product.updatedAt.toISOString(),
   };
 }
-

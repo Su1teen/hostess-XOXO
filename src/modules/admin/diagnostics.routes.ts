@@ -29,16 +29,23 @@ export async function diagnosticsRoutes(app: FastifyInstance): Promise<void> {
         database = 'unavailable';
       }
 
-      const [organization, counts, publishedRound, simulatedRound, lastSyncAt, lastSyncSummary, lastWebhook] =
-        await Promise.all([
-          app.prisma.organization.findFirst({ where: { isSelected: true } }),
-          app.services.products.counts(),
-          app.services.rounds.getCurrentPublishedRound(),
-          app.services.rounds.getLatestSimulatedRound(),
-          app.services.iikoSync.getLastMenuSyncAt(),
-          app.services.iikoSync.getLastMenuSyncSummary(),
-          app.prisma.salesEvent.findFirst({ orderBy: { receivedAt: 'desc' } }),
-        ]);
+      const [
+        organization,
+        counts,
+        publishedRound,
+        simulatedRound,
+        lastSyncAt,
+        lastSyncSummary,
+        lastWebhook,
+      ] = await Promise.all([
+        app.prisma.organization.findFirst({ where: { isSelected: true } }),
+        app.services.products.counts(),
+        app.services.rounds.getCurrentPublishedRound(),
+        app.services.rounds.getLatestSimulatedRound(),
+        app.services.iikoSync.getLastMenuSyncAt(),
+        app.services.iikoSync.getLastMenuSyncSummary(),
+        app.prisma.salesEvent.findFirst({ orderBy: { receivedAt: 'desc' } }),
+      ]);
 
       const nextRound = getNextRound(new Date(), timezone, interval);
 
@@ -83,13 +90,29 @@ export async function diagnosticsRoutes(app: FastifyInstance): Promise<void> {
           : null,
         products: counts,
         exchange: {
-          total: (await app.prisma.exchangeProduct.count()),
-          active: (await app.prisma.exchangeProduct.count({ where: { isActive: true } })),
-          currentRound: publishedRound ? { id: publishedRound.id, roundKey: publishedRound.roundKey, priceItemCount: publishedRound.prices.filter((item) => item.exchangeProductId).length } : null,
+          total: await app.prisma.exchangeProduct.count(),
+          active: await app.prisma.exchangeProduct.count({ where: { isActive: true } }),
+          currentRound: publishedRound
+            ? {
+                id: publishedRound.id,
+                roundKey: publishedRound.roundKey,
+                priceItemCount: publishedRound.prices.filter((item) => item.exchangeProductId)
+                  .length,
+              }
+            : null,
           nextRound: nextRound.roundKey,
-          scheduler: { intervalMinutes: interval, timezone, running: !(await app.services.exchange.isPaused()) },
+          scheduler: {
+            intervalMinutes: interval,
+            timezone,
+            running: !(await app.services.exchange.isPaused()),
+            inProcess: app.roundScheduler ?? { enabled: false, schedule: null, timezone },
+          },
+          lastTransition: app.services.rounds.getTransitionState(),
           paused: await app.services.exchange.isPaused(),
-          initialization: { expectedProducts: 27, complete: (await app.prisma.exchangeProduct.count()) === 27 },
+          initialization: {
+            expectedProducts: 27,
+            complete: (await app.prisma.exchangeProduct.count()) === 27,
+          },
         },
         rounds: {
           currentWindow: serializeWindow(getCurrentRound(new Date(), timezone, interval)),
@@ -141,6 +164,61 @@ export async function diagnosticsRoutes(app: FastifyInstance): Promise<void> {
           defaultStep: app.env.PRICE_DEFAULT_STEP,
           roundIntervalMinutes: interval,
         },
+      };
+    },
+  );
+
+  /**
+   * Состояние раундов и последнего перехода: чтобы понять «почему цена не изменилась»
+   * без доступа к БД. Гостевой API этого не отдаёт — только админ по x-admin-api-key.
+   */
+  app.get(
+    `${API_PREFIX}/admin/exchange/round-state`,
+    {
+      preHandler: app.requireAdmin,
+      schema: {
+        tags: ['Admin Diagnostics'],
+        summary: 'Состояние активного раунда, продаж и последнего перехода',
+        security: [{ adminApiKey: [] }],
+      },
+    },
+    async () => {
+      const now = new Date();
+      const timezone = app.env.APP_TIMEZONE;
+      const interval = app.env.PRICE_ROUND_INTERVAL_MINUTES;
+      const activeRound = await app.services.exchange.getActiveRound();
+      const sales = activeRound
+        ? await app.prisma.exchangeSale.groupBy({
+            by: ['exchangeProductId'],
+            where: { roundId: activeRound.id, exchangeProductId: { not: null } },
+            _sum: { quantity: true },
+          })
+        : [];
+
+      return {
+        serverNow: now.toISOString(),
+        timezone,
+        serverTimezoneOffsetMinutes: -now.getTimezoneOffset(),
+        currentWindow: serializeWindow(getCurrentRound(now, timezone, interval)),
+        activeRound: activeRound
+          ? {
+              id: activeRound.id,
+              roundKey: activeRound.roundKey,
+              status: activeRound.status,
+              startsAt: activeRound.startsAt.toISOString(),
+              endsAt: activeRound.endsAt.toISOString(),
+              timezone: activeRound.timezone,
+              organizationId: activeRound.organizationId,
+              salesQuantityTotal: sales.reduce((sum, row) => sum + (row._sum.quantity ?? 0), 0),
+              salesByProduct: sales.map((row) => ({
+                productId: row.exchangeProductId,
+                quantity: row._sum.quantity ?? 0,
+              })),
+            }
+          : null,
+        scheduler: app.roundScheduler ?? { enabled: false, schedule: null, timezone },
+        paused: await app.services.exchange.isPaused(),
+        lastTransition: app.services.rounds.getTransitionState(),
       };
     },
   );
