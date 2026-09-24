@@ -216,67 +216,192 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         .bt-sales button { padding-left: 10px; padding-right: 10px; }
         .bt-sales .bt-apply-quantity { flex-basis: 100%; }
       }
-      /* XOXO work surface. The exchange controls below still call their original API. */
-      #bartenderMode { background: #090d0c; color: #f6f4ee; }
+      /* Bartender workspace: graphite, restrained brass, clear hierarchy. */
+      #bartenderMode {
+        --bt-bg: #101114;
+        --bt-surface: #1a1b1f;
+        --bt-surface-2: #222328;
+        --bt-line: #303137;
+        --bt-text: #f3f0ea;
+        --bt-muted: #9b9aa0;
+        --bt-brass: #c7ac83;
+        --bt-green: #93b79c;
+        background: var(--bt-bg);
+        color: var(--bt-text);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        font-size: 14px;
+      }
+      #bartenderMode button, #bartenderMode input, #bartenderMode select { font: inherit; }
+      #bartenderMode button { transition: background .16s ease, border-color .16s ease, transform .16s ease; }
+      #bartenderMode button:active { transform: scale(.97); }
+      #bartenderMode button:focus-visible, #bartenderMode input:focus-visible, #bartenderMode select:focus-visible { outline: 2px solid var(--bt-brass); outline-offset: 2px; }
       .bt-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
-      .bt-top { background: #101916; border-color: #26342d; padding: 16px max(16px, calc((100vw - 1240px) / 2)); gap: 8px 16px; }
-      .bt-top h2 { font-size: 22px; letter-spacing: -.04em; }
-      .bt-meta { color: #b1bdaf; }
-      #btUpdated { display: none; }
-      .bt-top .bt-actions { gap: 6px; }
-      .bt-top .bt-actions button { margin: 0; border-radius: 12px; background: #24332b; border-color: #304639; color: #f6f4ee; min-height: 40px; }
-      #btnBtFullscreen { display: none; }
-      .bt-tabs { display: flex; flex: 0 0 auto; gap: 6px; padding: 12px max(16px, calc((100vw - 1240px) / 2)); overflow-x: auto; background: #101916; border-bottom: 1px solid #26342d; }
-      #bartenderMode[data-tab]:not([data-tab='exchange']) .bt-meta, #bartenderMode[data-tab]:not([data-tab='exchange']) #btnBtRefresh { display: none; }
-      .bt-tabs button { margin: 0; flex: 1; min-width: 88px; min-height: 44px; border: 0; border-radius: 12px; background: transparent; color: #b7c1b7; font-weight: 700; }
-      .bt-tabs button[aria-selected='true'] { background: #e8b96c; color: #1a180f; }
-      .bt-tabs, .bt-filters { scrollbar-width: none; }
+      .bt-top { flex: 0 0 auto; background: #17181b; border-color: var(--bt-line); padding: 14px max(20px, calc((100vw - 1320px) / 2)); gap: 4px 18px; }
+      .bt-top h2 { font-size: 19px; font-weight: 730; letter-spacing: -.05em; line-height: 1; white-space: nowrap; }
+      .bt-brand-slash { color: var(--bt-brass); font-weight: 500; }
+      .bt-meta { align-items: center; color: var(--bt-muted); font-size: 12px; }
+      #btConn.status { padding: 0; background: transparent; font-size: 0; }
+      #btConn.status::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px; background: var(--bt-brass); vertical-align: middle; }
+      #btConn.status.ok::before { background: var(--bt-green); }
+      #btConn.status.err::before { background: #d58b84; }
+      #btConn.status::after { content: 'Биржа'; font-size: 12px; color: var(--bt-muted); }
+      #btConn.status.err::after { content: 'Нет связи'; }
+      #btRound { white-space: nowrap; }
+      #btUpdated, #btnBtFullscreen { display: none; }
+      .bt-top .bt-actions { gap: 8px; align-items: center; }
+      .bt-top .bt-actions button { margin: 0; min-height: 36px; padding: 6px 11px; border-radius: 9px; border: 1px solid transparent; background: transparent; color: #c5c3c0; font-size: 12px; }
+      .bt-top .bt-actions button:hover { background: #292a2f; color: #fff; }
+      .bt-tabs { flex: 0 0 auto; display: flex; gap: 3px; width: 100%; padding: 7px max(20px, calc((100vw - 1320px) / 2)); overflow-x: auto; border-bottom: 1px solid var(--bt-line); background: #17181b; scrollbar-width: none; }
       .bt-tabs::-webkit-scrollbar, .bt-filters::-webkit-scrollbar { display: none; }
-      .bt-controls { border-color: #26342d; padding: 12px max(16px, calc((100vw - 1240px) / 2)); }
-      .bt-controls input[type='search'] { background: #19241e; border-color: #344539; color: #fff; border-radius: 12px; }
-      .bt-filters { flex-wrap: nowrap; max-width: 100%; overflow-x: auto; }
-      .bt-filters button { white-space: nowrap; border-radius: 99px; background: #18231d; color: #d7dfd5; border-color: #344539; }
-      .bt-filters button[aria-pressed='true'] { background: #e8b96c; border-color: #e8b96c; color: #18180f; }
-      .bt-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 295px), 1fr)); gap: 12px; padding: 16px max(16px, calc((100vw - 1240px) / 2)) 40px; }
-      .bt-card { background: #17221c; border-color: #304438; border-radius: 20px; padding: 17px; box-shadow: 0 14px 34px #0002; }
-      .bt-card h3 { font-size: 18px; letter-spacing: -.025em; }
-      .bt-prices { gap: 8px 18px; margin: 14px 0; }
-      .bt-prices div { color: #a5b2a4; }
-      .bt-prices b { color: #f7f4ec; }
-      .bt-prices .bt-now b { color: #eec780; font-size: 27px; }
-      .bt-prices div:nth-child(2), .bt-card > .bt-cat:nth-of-type(2) { display: none; }
-      .bt-sales button { border-radius: 12px; background: #26392d; color: #fff; border-color: #405847; }
-      .bt-sales button.bt-add-one { background: #e8b96c; border-color: #e8b96c; color: #17180f; font-size: 20px; font-weight: 700; }
-      .bt-sales input { border-radius: 12px; background: #101813; color: #fff; }
+      .bt-tabs button { flex: 0 0 auto; min-width: 100px; min-height: 38px; margin: 0; padding: 8px 15px; border: 0; border-radius: 9px; background: transparent; color: var(--bt-muted); font-weight: 580; font-size: 13px; }
+      .bt-tabs button[aria-selected='true'] { background: #303035; color: var(--bt-text); }
+      .bt-tabs button:hover:not([aria-selected='true']) { color: var(--bt-text); background: #24252a; }
+      #bartenderMode[data-tab]:not([data-tab='exchange']) .bt-meta, #bartenderMode[data-tab]:not([data-tab='exchange']) #btnBtRefresh { display: none; }
+      .bt-controls { flex: 0 0 auto; display: grid; grid-template-columns: minmax(220px, 340px) minmax(0, 1fr); gap: 14px; align-items: center; background: var(--bt-bg); border-color: var(--bt-line); padding: 18px max(20px, calc((100vw - 1320px) / 2)); }
+      .bt-controls input[type='search'], .bt-demo-search { width: 100%; height: 43px; min-height: 43px; margin: 0; padding: 0 15px; border: 1px solid #37383e; border-radius: 11px; background: #202126; color: var(--bt-text); font-size: 14px; }
+      .bt-controls input[type='search']::placeholder, .bt-demo-search::placeholder { color: #89888e; }
+      .bt-filters { display: flex; flex-wrap: nowrap; gap: 4px; overflow-x: auto; max-width: 100%; scrollbar-width: none; }
+      .bt-filters button { flex: 0 0 auto; min-height: 34px; margin: 0; padding: 5px 11px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--bt-muted); font-size: 12px; white-space: nowrap; }
+      .bt-filters button[aria-pressed='true'] { border-color: #4c4438; background: #302b26; color: #e7d1ae; }
+      .bt-filters button:hover { color: var(--bt-text); }
+      .bt-grid { display: block; max-width: 1320px; width: 100%; margin: 0 auto; padding: 12px 20px 44px; overflow: auto; }
+      .bt-grid[hidden], #btGridMessage[hidden], .bt-controls[hidden] { display: none; }
+      .bt-grid-message { max-width: 1320px; margin: 0 auto; padding: 18px 20px; color: var(--bt-muted); }
+      .bt-card { display: grid; grid-template-columns: minmax(180px, 2fr) minmax(195px, 1.8fr) minmax(190px, 1.3fr); gap: 18px; align-items: center; min-width: 0; margin: 0; padding: 17px 22px; border: 0; border-bottom: 1px solid #2d2e33; border-radius: 0; background: transparent; box-shadow: none; }
+      .bt-card:hover { background: #1b1c20; }
+      .bt-card:first-child { border-top: 1px solid #2d2e33; }
+      .bt-card h3 { margin: 0; font-size: 15px; line-height: 1.3; letter-spacing: -.02em; font-weight: 650; }
+      .bt-card .bt-cat { margin: 4px 0 0; color: var(--bt-muted); font-size: 12px; }
+      .bt-card-title, .bt-card-price { min-width: 0; }
+      .bt-prices { display: flex; align-items: baseline; justify-content: flex-start; gap: 18px; margin: 0; }
+      .bt-prices div { color: var(--bt-muted); font-size: 11px; white-space: nowrap; }
+      .bt-prices b { display: block; color: #c1bec0; font-size: 13px; font-weight: 560; }
+      .bt-prices .bt-now b { color: var(--bt-text); font-size: 20px; letter-spacing: -.035em; font-weight: 670; }
+      .bt-prices .bt-rate b { color: var(--bt-brass); font-size: 13px; }
+      .bt-prices .bt-rate.down b { color: var(--bt-green); }
+      .bt-sales { display: flex; justify-content: flex-end; align-items: center; gap: 5px; margin: 0; flex-wrap: nowrap; }
+      .bt-sales button { min-width: 34px; min-height: 34px; margin: 0; padding: 4px 8px; border: 1px solid #42434a; border-radius: 9px; background: #292a30; color: var(--bt-text); font-size: 17px; }
+      .bt-sales button.bt-add-one { background: #ab9070; border-color: #ab9070; color: #151515; font-size: 18px; font-weight: 650; }
+      .bt-sales button.bt-apply-quantity { min-width: 35px; padding: 4px 8px; border-color: #665a49; background: transparent; color: #dfc8a7; font-size: 15px; }
+      .bt-sales button.bt-apply-quantity:disabled { opacity: .34; }
+      .bt-sales input { width: 48px; min-height: 34px; margin: 0; padding: 2px; border: 1px solid #414248; border-radius: 9px; background: #202126; color: var(--bt-text); text-align: center; font-size: 13px; }
+      .bt-sales .bt-total-label { display: none; }
+      .bt-state { grid-column: 1 / -1; margin: -5px 0 0; font-size: 11px; }
       .bt-state:not(.err):not(.ok) { display: none; }
-      #btDemoPanel { flex: 1; min-height: 0; overflow-y: auto; padding: 16px max(16px, calc((100vw - 1240px) / 2)) 72px; }
+      .bt-state.err { color: #e3a8a3; }
+      .bt-state.ok { color: var(--bt-green); }
+      #btDemoPanel { flex: 1; min-height: 0; overflow-y: auto; padding: 30px max(20px, calc((100vw - 1320px) / 2)) 70px; }
       #btDemoPanel[hidden] { display: none; }
-      #btGrid[hidden], #btGridMessage[hidden], .bt-controls[hidden] { display: none; }
-      .bt-demo-head { display: flex; justify-content: space-between; gap: 16px; align-items: end; margin-bottom: 18px; }
-      .bt-demo-head h3 { font-size: 25px; margin: 0; letter-spacing: -.04em; }
-      .bt-demo-head p { margin: 4px 0 0; color: #a7b4a5; font-size: 13px; }
-      .bt-demo-layout { display: grid; grid-template-columns: minmax(0,1fr) 320px; gap: 18px; align-items: start; }
-      .bt-demo-list { display: grid; grid-template-columns: repeat(auto-fill,minmax(min(100%,230px),1fr)); gap: 10px; }
-      .bt-demo-card, .bt-demo-cart, .bt-demo-target { border: 1px solid #344b3a; border-radius: 18px; background: #18241c; padding: 16px; }
-      .bt-demo-card strong { display: block; font-size: 16px; }
-      .bt-demo-card small { display: block; color: #9fac9d; margin-top: 5px; }
-      .bt-demo-card button, .bt-demo-cart button, .bt-demo-target button { border-radius: 12px; min-height: 42px; }
-      .bt-demo-card button { background: #e8b96c; color: #19180f; border: 0; width: 100%; margin: 14px 0 0; font-weight: 700; }
-      .bt-demo-cart { position: sticky; top: 0; }
-      .bt-demo-cart select, .bt-demo-cart input, .bt-demo-search { width: 100%; min-height: 44px; padding: 10px 12px; border-radius: 12px; background: #101813; border: 1px solid #3b5140; color: #fff; }
-      .bt-demo-cart label { display: block; color: #b8c6b8; font-size: 12px; margin-top: 14px; }
-      .bt-demo-total { display: flex; justify-content: space-between; font-size: 20px; font-weight: 700; padding: 16px 0; border-top: 1px solid #344b3a; }
-      .bt-demo-checkout { width: 100%; background: #e8b96c; color: #19180f; border: 0; font-weight: 800; }
-      .bt-demo-checkout:disabled { opacity: .45; }
-      .bt-demo-jump { display: none; }
-      .bt-demo-jump[hidden] { display: none; }
-      .bt-demo-cart-line { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid #2b3d30; font-size: 13px; }
-      .bt-demo-cart-line button { min-height: 30px; padding: 2px 9px; background: #344b3a; color: #fff; }
-      .bt-demo-target { margin-bottom: 10px; }
-      .bt-demo-target strong { display: block; font-size: 17px; }
-      .bt-demo-target p { color: #a7b4a5; font-size: 13px; }
-      .bt-demo-pill { display: inline-block; border-radius: 99px; background: #304737; color: #d8e7d7; padding: 4px 9px; font-size: 11px; }
-      @media (max-width: 760px) { #btDemoPanel { overflow-x: hidden; padding-bottom: 100px; } .bt-demo-layout { grid-template-columns: minmax(0,1fr); } .bt-demo-layout > div { min-width: 0; } .bt-demo-list { grid-template-columns: minmax(0,1fr); } .bt-demo-cart { position: static; } .bt-demo-jump { display: block; position: fixed; left: 16px; right: 16px; bottom: calc(14px + env(safe-area-inset-bottom)); z-index: 5; min-height: 52px; border: 0; border-radius: 16px; background: #e8b96c; color: #19180f; font-weight: 800; box-shadow: 0 12px 30px #0008; } .bt-demo-head h3 { font-size: 23px; } .bt-top { padding: 13px 16px; } .bt-top .bt-actions { width: auto; margin-left: auto; } #btnBtAdmin { display: none; } .bt-top .bt-actions button { font-size: 12px; padding: 8px; } .bt-grid { padding: 12px 12px 40px; } .bt-controls { padding: 10px 12px; } .bt-tabs { padding: 8px 12px; } .bt-tabs button { min-width: 0; padding: 8px 4px; } }
+      .bt-demo-head { margin: 0 0 22px; }
+      .bt-demo-head h3 { margin: 0; color: var(--bt-text); font-size: clamp(25px, 3vw, 34px); font-weight: 670; letter-spacing: -.055em; }
+      .bt-demo-head p { margin: 5px 0 0; color: var(--bt-muted); font-size: 13px; }
+      .bt-demo-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); gap: 44px; align-items: start; }
+      .bt-demo-layout > div { min-width: 0; }
+      .bt-demo-catalog-tools { display: grid; grid-template-columns: minmax(160px, 280px) minmax(0, 1fr); gap: 12px; align-items: center; margin-bottom: 14px; }
+      .bt-demo-list { display: block; }
+      .bt-demo-section { margin: 20px 0 5px; padding: 0 4px 8px; border-bottom: 1px solid #414148; color: #d2c2ac; font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+      .bt-demo-card, .bt-demo-variant { display: flex; gap: 14px; align-items: center; justify-content: space-between; min-height: 61px; padding: 11px 4px; border: 0; border-bottom: 1px solid #2e2f34; border-radius: 0; background: transparent; }
+      .bt-demo-card:hover, .bt-demo-variant:hover { background: #1b1c20; }
+      .bt-demo-card-copy { min-width: 0; }
+      .bt-demo-card strong { display: block; font-size: 14px; font-weight: 620; }
+      .bt-demo-card small { display: block; margin-top: 2px; color: var(--bt-muted); font-size: 11px; }
+      .bt-demo-card-action { display: flex; align-items: center; gap: 14px; flex: 0 0 auto; }
+      .bt-demo-card-action .bt-demo-price { color: #d8d5d0; font-size: 13px; font-weight: 610; white-space: nowrap; }
+      .bt-demo-card button, .bt-demo-variant button { width: 31px; height: 31px; min-height: 31px; margin: 0; padding: 0; border: 1px solid #555048; border-radius: 9px; background: #302d2a; color: #e9d2af; font-size: 20px; line-height: 1; }
+      .bt-demo-group { border-bottom: 1px solid #2e2f34; }
+      .bt-demo-group summary { display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 10px 4px; cursor: pointer; list-style: none; }
+      .bt-demo-group summary::-webkit-details-marker { display: none; }
+      .bt-demo-group summary::after { content: '⌄'; order: 3; margin-left: 2px; color: var(--bt-muted); font-size: 18px; }
+      .bt-demo-group[open] summary::after { transform: rotate(180deg); }
+      .bt-demo-group .bt-demo-card-action { margin-left: auto; }
+      .bt-demo-variant { min-height: 46px; padding-left: 20px; border-bottom-color: #26272c; }
+      .bt-demo-variant:last-child { border-bottom: 0; }
+      .bt-demo-cart { position: sticky; top: 6px; padding: 22px; border: 1px solid #36373d; border-radius: 18px; background: #1b1c20; box-shadow: 0 18px 38px #0002; }
+      .bt-demo-cart > strong { display: block; font-size: 18px; letter-spacing: -.03em; }
+      .bt-demo-cart label { margin: 16px 0 5px; color: var(--bt-muted); font-size: 11px; }
+      .bt-demo-cart select { width: 100%; min-height: 40px; padding: 7px 10px; border: 1px solid #414248; border-radius: 9px; background: #25262b; color: var(--bt-text); }
+      .bt-demo-cart-line { display: grid; grid-template-columns: minmax(0, 1fr) auto 28px; gap: 8px; align-items: center; padding: 10px 0; border-bottom: 1px solid #34353b; font-size: 12px; }
+      .bt-demo-cart-line button { width: 26px; height: 26px; min-height: 26px; margin: 0; padding: 0; border: 0; border-radius: 7px; background: #303137; color: var(--bt-text); }
+      .bt-demo-empty { padding: 22px 0 10px; color: var(--bt-muted); font-size: 12px; }
+      .bt-demo-total { display: flex; justify-content: space-between; gap: 12px; padding: 17px 0; border-top: 1px solid #494a50; color: var(--bt-text); font-size: 19px; font-weight: 670; letter-spacing: -.025em; }
+      .bt-demo-pill { display: inline-block; margin-bottom: 12px; color: #b9d1bb; font-size: 11px; }
+      .bt-demo-checkout { width: 100%; min-height: 44px; margin: 0; border: 0; border-radius: 10px; background: #bda17b; color: #181613; font-weight: 700; }
+      .bt-demo-checkout:disabled { opacity: .4; }
+      .bt-demo-success { margin-top: 12px; color: var(--bt-green); font-size: 12px; }
+      .bt-demo-jump, .bt-demo-jump[hidden] { display: none; }
+      .bt-demo-target { padding: 17px 18px; border: 1px solid #36373d; border-radius: 13px; background: #1b1c20; }
+      .bt-demo-target strong { font-size: 15px; }
+      .bt-demo-target p { color: var(--bt-muted); font-size: 12px; }
+      .bt-demo-target button { margin: 8px 0 0; min-height: 34px; border: 1px solid #5a5044; border-radius: 9px; background: #302d2a; color: #ead4b4; }
+      .bt-demo-people { max-width: 780px; }
+      .bt-demo-person { padding: 24px; }
+      .bt-demo-person-head { display: flex; justify-content: space-between; gap: 20px; align-items: start; }
+      .bt-demo-person-head strong { font-size: 19px; letter-spacing: -.03em; }
+      .bt-demo-person-head p { margin: 4px 0 0; }
+      .bt-demo-balance { text-align: right; white-space: nowrap; }
+      .bt-demo-balance small { display: block; color: var(--bt-muted); font-size: 11px; }
+      .bt-demo-balance b { display: block; color: var(--bt-text); font-size: 21px; letter-spacing: -.04em; }
+      .bt-demo-history { margin: 23px 0 15px; border-top: 1px solid var(--bt-line); }
+      .bt-demo-history-title { padding: 15px 0 5px; color: var(--bt-muted); font-size: 11px; }
+      .bt-demo-history-line { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid #303137; }
+      .bt-demo-history-line span { display: block; font-size: 12px; }
+      .bt-demo-history-line small { display: block; margin-top: 3px; color: var(--bt-muted); font-size: 11px; line-height: 1.4; }
+      .bt-demo-history-line b { flex: 0 0 auto; font-size: 12px; font-weight: 620; }
+      .bt-demo-table-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+      .bt-demo-table { display: flex; flex-direction: column; min-height: 155px; }
+      .bt-demo-table strong { font-size: 18px; }
+      .bt-demo-table p { margin: 4px 0 auto; }
+      .bt-demo-table .bt-demo-pill { margin: 10px 0 0; }
+      .bt-demo-table .bt-demo-secondary { align-self: flex-start; }
+      @media (max-width: 850px) {
+        .bt-controls { grid-template-columns: 1fr; gap: 9px; }
+        .bt-demo-layout { grid-template-columns: minmax(0, 1fr) 300px; gap: 22px; }
+        .bt-card { grid-template-columns: minmax(145px, 1.3fr) minmax(155px, 1.5fr) minmax(160px, 1fr); gap: 10px; padding: 14px 12px; }
+      }
+      @media (max-width: 700px) {
+        .bt-top { padding: 12px 16px; gap: 8px; }
+        .bt-top h2 { font-size: 18px; }
+        .bt-meta { order: 3; width: 100%; font-size: 11px; }
+        .bt-top .bt-actions { margin-left: auto; width: auto; gap: 0; }
+        .bt-top .bt-actions button { padding: 5px 7px; font-size: 11px; }
+        #btnBtAdmin { display: none; }
+        .bt-tabs { padding: 6px 12px; }
+        .bt-tabs button { flex: 1 0 auto; min-width: 76px; padding: 6px 9px; font-size: 12px; }
+        .bt-controls { padding: 12px 14px; }
+        .bt-grid { padding: 0 12px 30px; }
+        .bt-card { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; padding: 14px 4px; }
+        .bt-card-title { grid-column: 1; }
+        .bt-card h3 { font-size: 14px; }
+        .bt-prices { grid-column: 2; grid-row: 1; display: grid; grid-template-columns: auto auto; gap: 1px 6px; justify-content: end; text-align: right; }
+        .bt-prices .bt-menu, .bt-prices .bt-minimum { display: block; grid-column: 1 / -1; font-size: 10px; }
+        .bt-prices .bt-menu { grid-row: 2; }
+        .bt-prices .bt-minimum { grid-row: 3; }
+        .bt-prices .bt-menu b, .bt-prices .bt-minimum b { display: inline; margin-left: 4px; color: var(--bt-muted); font-size: 10px; }
+        .bt-prices .bt-now { font-size: 0; }
+        .bt-prices .bt-now b { font-size: 17px; }
+        .bt-prices .bt-rate { font-size: 0; }
+        .bt-prices .bt-rate b { font-size: 11px; }
+        .bt-sales { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
+        .bt-sales::before { content: 'Продано'; margin-right: auto; color: var(--bt-muted); font-size: 11px; }
+        #btDemoPanel { padding: 24px 16px 105px; }
+        .bt-demo-head { margin-bottom: 17px; }
+        .bt-demo-head h3 { font-size: 28px; }
+        .bt-demo-layout { grid-template-columns: minmax(0, 1fr); gap: 30px; }
+        .bt-demo-catalog-tools { display: block; }
+        .bt-demo-catalog-tools .bt-filters { margin-top: 9px; }
+        .bt-demo-cart { position: static; padding: 19px; }
+        .bt-demo-person { padding: 19px; }
+        .bt-demo-table-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+        .bt-demo-table { min-height: 145px; padding: 14px; }
+        .bt-demo-table strong { font-size: 16px; }
+        .bt-demo-table .bt-demo-secondary { font-size: 11px; }
+        .bt-demo-jump:not([hidden]) { display: block; position: fixed; left: 16px; right: 16px; bottom: calc(14px + env(safe-area-inset-bottom)); z-index: 5; width: calc(100% - 32px); min-height: 48px; margin: 0; border: 0; border-radius: 12px; background: #bda17b; color: #181613; font-weight: 700; box-shadow: 0 12px 30px #0009; }
+      }
+      @media (max-width: 360px) {
+        .bt-card { gap: 7px; }
+        .bt-prices .bt-now b { font-size: 15px; }
+        .bt-demo-card-action { gap: 8px; }
+      }
     </style>
   </head>
   <body>
@@ -434,7 +559,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
 
       <div id="bartenderWorkspace" hidden>
         <div class="bt-top">
-          <h2>XOXO <span style="color:#e8b96c">/ BAR</span><span class="bt-sr-only">Бармен — продажи</span></h2>
+          <h2>XOXO <span class="bt-brand-slash">/ BAR</span><span class="bt-sr-only">Бармен — продажи</span></h2>
           <div class="bt-meta">
             <span id="btConn" class="status warn">подключение…</span>
             <span id="btRound">раунд: —</span>
@@ -454,7 +579,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           <button type="button" data-bt-tab="tables" aria-selected="false">Столы</button>
         </nav>
         <div class="bt-controls">
-          <input id="btSearch" type="search" placeholder="Поиск: название или категория" autocomplete="off" />
+          <input id="btSearch" type="search" placeholder="Найти товар" autocomplete="off" />
           <div id="btFilters" class="bt-filters"></div>
         </div>
         <div id="btGrid" class="bt-grid"></div>
@@ -1195,10 +1320,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         function renderStatus(status) {
           var round = status.currentRound;
           state.roundEndsAt = round ? round.endsAt : null;
-          el('btRound').textContent = 'раунд: ' + (round ? round.roundKey : '—') +
-            (status.secondsRemaining === null || status.secondsRemaining === undefined
-              ? ''
-              : ' (' + Math.ceil(status.secondsRemaining / 60) + ' мин)');
+          el('btRound').textContent = round && round.endsAt ? 'до ' + time(round.endsAt) : 'раунд не начат';
           el('btUpdated').textContent = 'обновлено: ' + time(status.generatedAt) +
             ' · позиций: ' + status.activeProducts +
             ' · продаж в раунде: ' + status.currentRoundSales +
@@ -1306,34 +1428,32 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           var node = document.createElement('div');
           node.className = 'bt-card';
 
+          var identity = document.createElement('div');
+          identity.className = 'bt-card-title';
           var title = document.createElement('h3');
           title.textContent = product.name;
-          node.appendChild(title);
+          identity.appendChild(title);
 
           var meta = document.createElement('div');
           meta.className = 'bt-cat';
           meta.textContent = product.category + (product.volumeMl ? ' · ' + product.volumeMl + ' мл' : '');
-          node.appendChild(meta);
+          identity.appendChild(meta);
+          node.appendChild(identity);
 
           var prices = document.createElement('div');
           prices.className = 'bt-prices';
-          prices.appendChild(priceCell('Меню', price(product.originalPrice), ''));
-          prices.appendChild(priceCell('Минимум', price(product.minPrice), ''));
           prices.appendChild(priceCell('Сейчас', price(product.currentPrice), 'bt-now'));
-          prices.appendChild(priceCell('Ставка', levelLabel(product.priceLevelPercent), ''));
+          prices.appendChild(priceCell('Меню', price(product.originalPrice), 'bt-menu'));
+          prices.appendChild(priceCell('Минимум', price(product.minPrice), 'bt-minimum'));
+          prices.appendChild(priceCell('Ставка', levelLabel(product.priceLevelPercent), 'bt-rate' + (product.priceLevelPercent < 0 ? ' down' : '')));
           node.appendChild(prices);
-
-          var roundInfo = document.createElement('div');
-          roundInfo.className = 'bt-cat';
-          roundInfo.textContent = 'Раунд до: ' + time(state.roundEndsAt);
-          node.appendChild(roundInfo);
 
 
           var saleSecondary = document.createElement('div');
           saleSecondary.className = 'bt-sales';
           var quantityLabel = document.createElement('span');
           quantityLabel.className = 'bt-total-label';
-          quantityLabel.textContent = 'Продано в текущем раунде';
+          quantityLabel.textContent = 'Продано';
           saleSecondary.appendChild(quantityLabel);
           var minus = document.createElement('button');
           minus.type = 'button';
@@ -1396,7 +1516,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           applyButton = document.createElement('button');
           applyButton.type = 'button';
           applyButton.className = 'bt-apply-quantity';
-          applyButton.textContent = 'Применить';
+          applyButton.textContent = '✓';
           applyButton.setAttribute('aria-label', 'Сохранить итоговое количество продаж');
           applyButton.disabled = card.updatePending || !card.quantityEditing;
           applyButton.addEventListener('click', function () {
