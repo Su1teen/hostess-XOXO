@@ -67,8 +67,14 @@ export function createServices(
     onAttempt: (attempt) => audit.recordIikoAttempt(attempt),
   });
 
-  const exchange = new ExchangeService(prisma);
-  const bartender = new BartenderService(prisma, exchange, audit);
+  const rounds = new RoundsService(prisma, env, audit, logger.child({ component: 'rounds' }));
+  const exchange = new ExchangeService(prisma, rounds, logger.child({ component: 'exchange' }));
+  const bartender = new BartenderService(
+    prisma,
+    exchange,
+    audit,
+    logger.child({ component: 'bartender' }),
+  );
   const bartenderSessions = new BartenderSessionService({
     pinHash: env.BARTENDER_PIN_HASH,
     pin: env.BARTENDER_PIN,
@@ -77,7 +83,6 @@ export function createServices(
     attemptWindowSeconds: env.BARTENDER_LOGIN_WINDOW_SECONDS,
   });
   const products = new ProductsService(prisma, audit);
-  const rounds = new RoundsService(prisma, env, audit);
   const sales = new SalesService(prisma);
   const iikoSync = new IikoSyncService(prisma, env, iikoClient, audit, telegram);
   const pricePublisher = createPricePublisher(env, rounds);

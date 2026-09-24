@@ -87,6 +87,8 @@ export const envSchema = z
 
     PRICE_PUBLISHER_MODE: z.enum(['disabled', 'manual', 'front_plugin']).default('disabled'),
     PRICE_ROUND_INTERVAL_MINUTES: z.coerce.number().int().min(1).max(1440).default(15),
+    /** Внутренний планировщик перехода раундов в web-процессе (по умолчанию включён). */
+    ROUND_SCHEDULER_ENABLED: booleanFromString.removeDefault().default(true),
     PRICE_ROUND_PREPARE_MINUTES_BEFORE: z.coerce.number().int().min(0).max(60).default(3),
     PRICE_MAX_CHANGE_PERCENT: z.coerce.number().min(0).max(100).default(10),
     PRICE_DEFAULT_STEP: z.coerce.number().min(1).max(100000).default(50),

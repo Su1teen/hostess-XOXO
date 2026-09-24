@@ -13,6 +13,18 @@ describe('iiko environment defaults', () => {
     expect(env.IIKO_MENU_BY_ID_PATH).toBe('/menu/by_id');
   });
 
+  it('внутренний планировщик раундов включён по умолчанию и отключается явно', () => {
+    const base = {
+      DATABASE_URL: 'postgresql://localhost/test',
+      ADMIN_API_KEY: '1234567890abcdef',
+    } as NodeJS.ProcessEnv;
+
+    expect(parseEnv(base).ROUND_SCHEDULER_ENABLED).toBe(true);
+    expect(parseEnv({ ...base, ROUND_SCHEDULER_ENABLED: 'false' }).ROUND_SCHEDULER_ENABLED).toBe(
+      false,
+    );
+  });
+
   it('отклоняет apiKey как имя поля auth body', () => {
     expect(() =>
       parseEnv({
