@@ -23,6 +23,9 @@ export const BARTENDER_DEMO_SCRIPT = String.raw`
   var data;
   try { data = JSON.parse(localStorage.getItem(storageKey)) || seed; } catch (_) { data = seed; }
   if (!data || !Array.isArray(data.orders) || !Array.isArray(data.customers) || !Array.isArray(data.tables)) data = seed;
+  data.tables = data.tables.slice(0, 6);
+  while (data.tables.length < 6) { var number = data.tables.length + 1; data.tables.push({ id: 'table-' + number, number: number, seats: number <= 2 ? 2 : 4 }); }
+  try { localStorage.setItem(storageKey, JSON.stringify(data)); } catch (_) {}
   var cart = [];
   var tab = 'exchange';
   var category = 'Все';

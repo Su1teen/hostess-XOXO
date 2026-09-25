@@ -402,6 +402,66 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         .bt-prices .bt-now b { font-size: 15px; }
         .bt-demo-card-action { gap: 8px; }
       }
+      /* Fast, touch-first bartender workspace: dense exchange tiles and clear order actions. */
+      .bt-top { padding-left: 5vw; padding-right: 5vw; }
+      .bt-tabs { padding-left: 5vw; padding-right: 5vw; }
+      .bt-controls { padding-left: 5vw; padding-right: 5vw; }
+      .bt-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; max-width: none; width: 90%; padding: 18px 0 48px; overflow: visible; }
+      .bt-card { display: flex; flex-direction: column; align-items: stretch; justify-content: space-between; gap: 15px; min-height: 246px; padding: 18px; border: 1px solid #34353b; border-radius: 18px; background: linear-gradient(145deg,#1d1e23,#191a1f); box-shadow: 0 12px 30px #0002; }
+      .bt-card:first-child { border-top: 1px solid #34353b; }
+      .bt-card:hover { transform: translateY(-2px); border-color: #5a5044; background: #202126; }
+      .bt-card h3 { font-size: 16px; }
+      .bt-prices { justify-content: space-between; gap: 8px; }
+      .bt-prices .bt-now b { font-size: 23px; }
+      .bt-sales { justify-content: stretch; gap: 8px; }
+      .bt-sales button { min-width: 46px; min-height: 48px; border-radius: 12px; }
+      .bt-sales button.bt-apply-quantity { min-width: 48px; }
+      .bt-sales input { width: 58px; min-height: 48px; font-size: 16px; }
+      #btDemoPanel { padding-left: 5vw; padding-right: 5vw; }
+      .bt-demo-layout { grid-template-columns: minmax(0, 1fr) minmax(330px, 380px); gap: 24px; }
+      .bt-demo-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+      .bt-demo-section { grid-column: 1 / -1; margin-top: 12px; }
+      .bt-demo-card, .bt-demo-variant { min-height: 132px; padding: 16px; flex-direction: column; align-items: stretch; justify-content: space-between; gap: 16px; border: 1px solid #34353b; border-radius: 16px; background: linear-gradient(145deg,#1d1e23,#191a1f); }
+      .bt-demo-card strong { font-size: 15px; line-height: 1.4; }
+      .bt-demo-card-action { justify-content: space-between; gap: 8px; }
+      .bt-demo-card-action .bt-demo-price { font-size: 16px; }
+      .bt-demo-card button, .bt-demo-variant button { width: 48px; height: 48px; min-height: 48px; border-radius: 13px; font-size: 24px; }
+      .bt-demo-group { display: contents; }
+      .bt-demo-group summary { grid-column: 1 / -1; min-height: 54px; margin-top: 10px; }
+      .bt-demo-variant { min-height: 100px; }
+      .bt-demo-cart { top: 12px; }
+      .bt-demo-cart select { min-height: 48px; font-size: 15px; }
+      .bt-demo-cart-line { min-height: 48px; }
+      .bt-demo-cart-line button { width: 38px; height: 38px; min-height: 38px; font-size: 18px; }
+      .bt-demo-checkout { min-height: 54px; font-size: 15px; }
+      .bt-demo-table-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+      .bt-demo-table { min-height: 210px; padding: 22px; }
+      .bt-demo-table strong { font-size: 24px; }
+      .bt-demo-table .bt-demo-secondary { min-height: 48px; padding: 8px 15px; font-size: 14px; }
+      @media (max-width: 1500px) { .bt-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+      @media (max-width: 1100px) { .bt-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); width: 92%; } .bt-demo-layout { grid-template-columns: minmax(0, 1fr) 330px; gap: 18px; } .bt-demo-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+      @media (max-width: 700px) {
+        .bt-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); width: 92%; gap: 10px; padding-top: 12px; }
+        .bt-top { padding-left: 16px; padding-right: 16px; }
+        .bt-tabs, .bt-controls { padding-left: 4vw; padding-right: 4vw; }
+        .bt-card { min-height: 214px; padding: 13px; gap: 12px; }
+        .bt-prices { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 5px; }
+        .bt-prices .bt-now b { font-size: 20px; }
+        .bt-sales { gap: 5px; }
+        .bt-sales button, .bt-sales button.bt-apply-quantity { min-width: 40px; min-height: 44px; padding: 3px; }
+        .bt-sales input { width: 42px; min-height: 44px; }
+        .bt-sales::before { display: none; }
+        #btDemoPanel { padding: 22px 5vw calc(110px + env(safe-area-inset-bottom)); }
+        .bt-demo-layout { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+        .bt-demo-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+        .bt-demo-card, .bt-demo-variant { min-height: 128px; padding: 13px; }
+        .bt-demo-card button, .bt-demo-variant button { width: 46px; height: 46px; min-height: 46px; }
+        .bt-demo-cart { position: sticky; bottom: 8px; z-index: 4; padding: 16px; box-shadow: 0 12px 34px #0008; }
+        .bt-demo-table-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+        .bt-demo-table { min-height: 185px; padding: 17px; }
+        .bt-demo-table .bt-demo-secondary { width: 100%; }
+      }
+      @media (max-width: 370px) { .bt-grid { width: 94%; gap: 7px; } .bt-card { padding: 10px; } .bt-prices .bt-now b { font-size: 18px; } .bt-demo-card, .bt-demo-variant { padding: 10px; } }
     </style>
   </head>
   <body>
