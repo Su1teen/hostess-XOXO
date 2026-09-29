@@ -256,10 +256,10 @@ describe('дискретные уровни цены — дополнитель�
     ).toBe('800');
   });
 
-  it('двигает уровень ровно на один шаг при подтверждённом спросе', () => {
-    // Шаг всегда 10 п.п.: количество продаж не ускоряет рост, а средний спрос
-    // по каталогу больше не может обнулить delta отдельного товара.
-    expect(calculatePriceLevelDelta(0)).toBe(0);
+  it('двигает уровень ровно на один шаг: ноль продаж снижает цену', () => {
+    // Нулевой спрос возвращает цену к минимуму, одна продажа ничего не меняет,
+    // две и больше подтверждают спрос. Количество не ускоряет движение.
+    expect(calculatePriceLevelDelta(0)).toBe(-10);
     expect(calculatePriceLevelDelta(1)).toBe(0);
     expect(calculatePriceLevelDelta(2)).toBe(10);
     expect(calculatePriceLevelDelta(5)).toBe(10);
@@ -290,8 +290,8 @@ describe('Bud: 10 продаж за раунд → -20% / 1750 ₸', () => {
     expect(Number(price.toString())).not.toBe(990);
   });
 
-  it('без продаж уровень и цена не меняются', () => {
-    expect(clampPriceLevel(-30 + calculatePriceLevelDelta(0))).toBe(-30);
+  it('без продаж цена движется к минимальной и не может пройти ниже неё', () => {
+    expect(clampPriceLevel(-20 + calculatePriceLevelDelta(0))).toBe(-30);
     expect(Number(calculatePriceFromLevel({ ...BUD, priceLevelPercent: -30 }).toString())).toBe(
       1550,
     );

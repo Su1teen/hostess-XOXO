@@ -32,7 +32,9 @@ export class ExchangeService {
   /**
    * Идемпотентная инициализация каталога биржи (без iiko).
    * Повторный запуск не создаёт дубликаты и НЕ сбрасывает текущую цену:
-   * применённая барменом цена остаётся канонической после рестарта.
+   * применённая барменом цена остаётся канонической после рестарта. Для
+   * осознанного возврата всех позиций к минимуму используется отдельный
+   * подтверждаемый скрипт db:reset-exchange.
    */
   async seedProducts() {
     for (const product of EXCHANGE_PRODUCTS) {
@@ -236,9 +238,18 @@ export class ExchangeService {
               calculatedPrice: product.currentPrice,
               publishedPrice: product.currentPrice,
               originalPrice: product.originalPrice,
-              priceLevelPercent: product.priceLevelPercent,
-              discountPercent: product.currentDiscountPercent,
-              actualDiscountPercent: product.currentDiscountPercent,
+              priceLevelPercent: getCanonicalPriceLevelPercent({
+                originalPrice: product.originalPrice,
+                currentPrice: product.currentPrice,
+              }),
+              discountPercent: calculateDiscountPercent(
+                product.originalPrice,
+                product.currentPrice,
+              ),
+              actualDiscountPercent: calculateDiscountPercent(
+                product.originalPrice,
+                product.currentPrice,
+              ),
               minPrice: product.minPrice,
               maxPrice: product.maxPrice,
               priceStep: product.priceStep,
@@ -288,11 +299,16 @@ export class ExchangeService {
           price.exchangeProduct.originalPrice.toString(),
           price.calculatedPrice.toString(),
         );
+        const level = getCanonicalPriceLevelPercent({
+          originalPrice: price.exchangeProduct.originalPrice,
+          currentPrice: price.calculatedPrice,
+        });
         await tx.roundPrice.update({
           where: { id: price.id },
           data: {
             publishedPrice: price.calculatedPrice,
             actualDiscountPercent: discount.toFixed(4),
+            priceLevelPercent: level,
             status: 'PUBLISHED',
           },
         });
@@ -302,6 +318,7 @@ export class ExchangeService {
             currentPrice: price.calculatedPrice,
             currentDiscountPercent: discount.toFixed(4),
             actualDiscountPercent: discount.toFixed(4),
+            priceLevelPercent: level,
           },
         });
       }

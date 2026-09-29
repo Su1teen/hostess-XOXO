@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { API_PREFIX } from '../../config/constants.js';
 import { toNumber } from '../../lib/money.js';
 import { getNextRound } from '../../lib/time.js';
+import { getCanonicalPriceLevelPercent } from '../../services/price-engine.service.js';
 import type { RoundWithPrices } from '../rounds/rounds.service.js';
 
 const publicProductSchema = {
@@ -180,7 +181,12 @@ function mapCatalogProduct(product: ExchangeProduct) {
     currency: product.currency,
     originalPrice: toNumber(product.originalPrice.toString()),
     minPrice: toNumber(product.minPrice.toString()),
-    priceLevelPercent: product.priceLevelPercent,
+    // Отдаём уровень, вычисленный от той же фактической цены, что показываем.
+    // Это защищает TV от старого/несогласованного значения в БД.
+    priceLevelPercent: getCanonicalPriceLevelPercent({
+      originalPrice: product.originalPrice,
+      currentPrice: product.currentPrice,
+    }),
     discountPercent: Math.round(Number(product.currentDiscountPercent.toString())),
     isAvailable: product.isActive,
   };

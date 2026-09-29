@@ -22,6 +22,7 @@
     "db:migrate:dev": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
+    "db:reset-exchange": "tsx prisma/reset-exchange-to-minimum.ts",
     "db:studio": "prisma studio",
     "cron:simulate": "tsx src/jobs/simulate-round.job.ts",
     "cron:simulate:prod": "node dist/jobs/simulate-round.job.js",

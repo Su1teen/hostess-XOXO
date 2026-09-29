@@ -17,6 +17,7 @@ import {
   calculatePriceFromLevel,
   calculatePriceLevelDelta,
   clampPriceLevel,
+  getCanonicalPriceLevelPercent,
 } from '../../services/price-engine.service.js';
 
 /** Минимальный логгер перехода раундов: только структурированные события без секретов. */
@@ -167,7 +168,10 @@ export class RoundsService {
       const salesQuantity = override?.salesQuantity ?? salesByProduct.get(product.id) ?? 0;
       const demandScore = calculateExchangeDemandScore(salesQuantity, averageSales);
       const levelDelta = calculatePriceLevelDelta(salesQuantity);
-      const currentLevel = product.priceLevelPercent;
+      const currentLevel = getCanonicalPriceLevelPercent({
+        originalPrice: product.originalPrice,
+        currentPrice: product.currentPrice,
+      });
       const nextLevel = clampPriceLevel(currentLevel + levelDelta);
       const nextPrice =
         levelDelta === 0
@@ -331,7 +335,13 @@ export class RoundsService {
           const quantity = quantities.get(product.id) ?? 0;
           const demandScore = calculateExchangeDemandScore(quantity, average);
           const levelDelta = calculatePriceLevelDelta(quantity);
-          const currentLevel = product.priceLevelPercent;
+          // Не доверяем сохранённому уровню: он мог остаться от старой версии
+          // seed/админ-панели. Для следующего раунда исходной точкой всегда
+          // служит фактическая currentPrice.
+          const currentLevel = getCanonicalPriceLevelPercent({
+            originalPrice: product.originalPrice,
+            currentPrice: product.currentPrice,
+          });
           const nextLevel = clampPriceLevel(currentLevel + levelDelta);
           const nextPrice =
             nextLevel === currentLevel
@@ -354,11 +364,29 @@ export class RoundsService {
             previousPrice: product.currentPrice.toString(),
             nextPrice: nextPrice.toString(),
           });
-          return { product, quantity, nextPrice, discount, demandScore, nextLevel, levelDelta };
+          return {
+            product,
+            quantity,
+            nextPrice,
+            discount,
+            demandScore,
+            currentLevel,
+            nextLevel,
+            levelDelta,
+          };
         });
 
         const priceRows = rows.map(
-          ({ product, quantity, nextPrice, discount, demandScore, nextLevel, levelDelta }) => ({
+          ({
+            product,
+            quantity,
+            nextPrice,
+            discount,
+            demandScore,
+            currentLevel,
+            nextLevel,
+            levelDelta,
+          }) => ({
             exchangeProductId: product.id,
             price: nextPrice.toString(),
             previousPrice: product.currentPrice.toString(),
@@ -381,7 +409,7 @@ export class RoundsService {
               closedRoundId: closedRound.id,
               closedRoundKey: closedRound.roundKey,
               closedRoundQuantity: quantity,
-              currentLevel: product.priceLevelPercent,
+              currentLevel,
               levelDelta,
               salesQuantity: quantity,
               averageSales: average,
@@ -452,7 +480,12 @@ export class RoundsService {
 
       if (result.closedRound && result.round) {
         const productsChanged = result.rows.filter(
-          (row) => row.nextLevel !== row.product.priceLevelPercent,
+          (row) =>
+            row.nextLevel !==
+            getCanonicalPriceLevelPercent({
+              originalPrice: row.product.originalPrice,
+              currentPrice: row.product.currentPrice,
+            }),
         ).length;
         this.transitionState = {
           lastStartedAt: startedAt.toISOString(),
@@ -568,9 +601,28 @@ export class RoundsService {
           data: { publishedPrice: price.calculatedPrice, status: 'PUBLISHED' },
         });
         if (price.exchangeProductId) {
+          const exchangeProduct = price.exchangeProduct;
+          const level = exchangeProduct
+            ? getCanonicalPriceLevelPercent({
+                originalPrice: exchangeProduct.originalPrice,
+                currentPrice: price.calculatedPrice,
+              })
+            : undefined;
+          const discount = exchangeProduct
+            ? calculateDiscountPercent(exchangeProduct.originalPrice, price.calculatedPrice)
+            : undefined;
           await tx.exchangeProduct.update({
             where: { id: price.exchangeProductId },
-            data: { currentPrice: price.calculatedPrice },
+            data: {
+              currentPrice: price.calculatedPrice,
+              ...(level === undefined ? {} : { priceLevelPercent: level }),
+              ...(discount === undefined
+                ? {}
+                : {
+                    currentDiscountPercent: discount,
+                    actualDiscountPercent: discount,
+                  }),
+            },
           });
         } else if (price.productId) {
           await tx.product.update({
@@ -633,9 +685,29 @@ export class RoundsService {
       if (previous) {
         for (const price of previous.prices) {
           if (price.exchangeProductId) {
+            const exchangeProduct = price.exchangeProduct;
+            const restoredPrice = price.publishedPrice ?? price.calculatedPrice;
+            const level = exchangeProduct
+              ? getCanonicalPriceLevelPercent({
+                  originalPrice: exchangeProduct.originalPrice,
+                  currentPrice: restoredPrice,
+                })
+              : undefined;
+            const discount = exchangeProduct
+              ? calculateDiscountPercent(exchangeProduct.originalPrice, restoredPrice)
+              : undefined;
             await tx.exchangeProduct.update({
               where: { id: price.exchangeProductId },
-              data: { currentPrice: price.publishedPrice ?? price.calculatedPrice },
+              data: {
+                currentPrice: restoredPrice,
+                ...(level === undefined ? {} : { priceLevelPercent: level }),
+                ...(discount === undefined
+                  ? {}
+                  : {
+                      currentDiscountPercent: discount,
+                      actualDiscountPercent: discount,
+                    }),
+              },
             });
           }
         }

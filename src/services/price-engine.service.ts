@@ -113,10 +113,11 @@ export function calculatePriceFromLevel(request: {
 /**
  * Спрос биржи за раунд.
  *
- * Q_i < 2                 -> 0 (нет активного спроса, цена не меняется)
+ * Q_i < 2                 -> 0 (нет подтверждённого спроса)
  * иначе clamp((Q_i - Q_avg) / max(Q_avg, 1), 0, 1)
  *
- * Отрицательного спроса нет: отсутствие продаж не опускает цену ниже текущей.
+ * Оценка используется для аудита; дискретное правило уровня ниже отдельно
+ * возвращает цену к минимуму при нуле продаж.
  */
 export function calculateExchangeDemandScore(quantity: MoneyInput, average: MoneyInput): Decimal {
   const sales = toDecimal(quantity);
@@ -129,14 +130,17 @@ export function calculateExchangeDemandScore(quantity: MoneyInput, average: Mone
  * Изменение уровня для следующего раунда по продажам закрытого раунда.
  *
  * Q >= EXCHANGE_MIN_SALES_FOR_DEMAND -> +10 (спрос подтверждён)
- * Q <  EXCHANGE_MIN_SALES_FOR_DEMAND -> 0  (уровень сохраняется)
+ * Q = 1                               -> 0  (недостаточно данных)
+ * Q = 0                               -> -10 (спроса нет — цена возвращается к минимуму)
  *
  * Сравнения со средним спросом здесь нет: продажи товара не должны обнуляться
  * из-за продаж соседних позиций, а уровень двигается детерминированно на один
  * шаг за раунд.
  */
-export function calculatePriceLevelDelta(quantity: MoneyInput): 0 | 10 {
-  return toDecimal(quantity).lt(EXCHANGE_MIN_SALES_FOR_DEMAND) ? 0 : PRICE_LEVEL_STEP;
+export function calculatePriceLevelDelta(quantity: MoneyInput): -10 | 0 | 10 {
+  const sales = toDecimal(quantity);
+  if (sales.isZero()) return -10;
+  return sales.lt(EXCHANGE_MIN_SALES_FOR_DEMAND) ? 0 : PRICE_LEVEL_STEP;
 }
 
 /** Ограничивает уровень канониническим диапазоном [-30, +70]. */
