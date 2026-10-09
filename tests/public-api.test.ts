@@ -85,3 +85,23 @@ describe('public exchange API', () => {
     await app.close();
   });
 });
+
+// Guest read path must never start a price-writing job.
+describe('read-only guest snapshot', () => {
+  it('does not advance a round', async () => {
+    const app = fastify();
+    const advance = vi.fn();
+    app.decorate('env', env as never);
+    app.decorate('services', {
+      rounds: { getCurrentPublishedRound: vi.fn(async () => null) },
+      exchange: { ensureCurrentRound: advance },
+    } as never);
+    app.decorate('prisma', { exchangeProduct: { findMany: vi.fn(async () => []) } } as never);
+    await app.register(publicRoutes);
+    const response = await app.inject({ method: 'GET', url: '/api/v1/public/snapshot' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().status).toBe('no_published_round');
+    expect(advance).not.toHaveBeenCalled();
+    await app.close();
+  });
+});

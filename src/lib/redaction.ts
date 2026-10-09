@@ -1,6 +1,8 @@
 /** Пути Pino, значения которых заменяются на [REDACTED]. */
 export const LOG_REDACT_PATHS = [
   'req.headers.authorization',
+  'req.headers["x-command-center-key"]',
+  'COMMAND_CENTER_SERVICE_KEY',
   'req.headers.cookie',
   'req.headers["x-admin-api-key"]',
   'req.headers["x-plugin-secret"]',

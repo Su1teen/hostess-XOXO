@@ -66,11 +66,11 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
   const activeProducts = () =>
     app.prisma.exchangeProduct.findMany({ where: { isActive: true }, orderBy: { name: 'asc' } });
 
-  const buildPayload = async () => {
+  const buildPayload = async (advanceRound = true) => {
     // Гарантирует, что раунд текущего окна опубликован (и что завершившийся раунд
     // закрыт с пересчётом цен по продажам) до чтения. Идемпотентно и не пересчитывает
     // цены, когда закрывать нечего.
-    await app.services.exchange.ensureCurrentRound();
+    if (advanceRound) await app.services.exchange.ensureCurrentRound();
     const round = await app.services.rounds.getCurrentPublishedRound();
     return {
       generatedAt: new Date().toISOString(),
@@ -93,6 +93,8 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     config: { rateLimit: { max: 240, timeWindow: '1 minute' } },
     schema: { tags: ['Public'], response: { 200: publicPayloadSchema } },
   };
+  // Read-only snapshot for guest BFF and quotes. Scheduler owns round advancement.
+  app.get(`${API_PREFIX}/public/snapshot`, publicOptions, async () => buildPayload(false));
   app.get(`${API_PREFIX}/public/current-round`, publicOptions, async () => buildPayload());
   app.get(`${API_PREFIX}/public/rounds/current`, publicOptions, async () => buildPayload());
   app.get(`${API_PREFIX}/public/prices`, publicOptions, async () => buildPayload());
