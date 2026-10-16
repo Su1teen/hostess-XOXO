@@ -1,7 +1,7 @@
 # Production release
 
-Railway starts the application without implicit DDL or catalog writes. Run `npm run db:migrate:deploy` separately after reviewing pending migrations and obtaining required production approval. Existing databases already contain the exchange catalog.
+Railway runs reviewed Prisma migrations in a separate pre-deploy phase using npm run db:migrate:deploy. Application startup is npm run start, without implicit DDL or catalog seeding. Prisma CLI is a runtime dependency. Do not use reset or db push on the shared production database.
 
-`npm run db:seed` is an explicit initialization operation: it can update catalog limits and active flags and select a demo organization. Do not run it on every restart or use it to supply kitchen menu data. Back up the database before any approved initialization.
+See docs/QR_ORDER_INTEGRATION.md for the QR event lifecycle, safe rollout and rollback. The new feature defaults to disabled until QR_ORDER_EVENTS_ENABLED=true is set on hostess-XOXO. Existing DATABASE_URL and COMMAND_CENTER_SERVICE_KEY are reused.
 
-Check `/health` and read-only `/api/v1/public/snapshot` after deployment. Keep the previous deployed commit SHA available for rollback.
+Catalog seed remains an explicit initialization command and must not run on every restart. Check /health and read-only /api/v1/public/snapshot after deploy and keep the previous application SHA for rollback.

@@ -1,3 +1,4 @@
+import { orderEventsRoutes } from './modules/command-center/order-events.routes.js';
 import { commandCenterRoutes } from './modules/command-center/command.routes.js';
 import fastify, { type FastifyInstance } from 'fastify';
 import { getEnv, type AppEnv } from './config/env.js';
@@ -56,6 +57,7 @@ export async function buildApp(env: AppEnv = getEnv()): Promise<FastifyInstance>
   await app.register(healthRoutes);
   await app.register(publicRoutes);
   await app.register(commandCenterRoutes);
+  await app.register(orderEventsRoutes);
   await app.register(bartenderRoutes);
   await app.register(diagnosticsRoutes);
   await app.register(exchangeRoutes);

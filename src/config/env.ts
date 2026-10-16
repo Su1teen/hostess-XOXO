@@ -50,6 +50,7 @@ export const envSchema = z
     BARTENDER_LOGIN_WINDOW_SECONDS: z.coerce.number().int().min(10).max(3600).default(300),
 
     CORS_ORIGINS: csvList,
+    QR_ORDER_EVENTS_ENABLED: booleanFromString,
     COMMAND_CENTER_SERVICE_KEY: optionalString.refine(
       (value) => !value || value.length >= 32,
       'Service key must be at least 32 characters',

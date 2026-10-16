@@ -26,7 +26,8 @@
     "db:studio": "prisma studio",
     "cron:simulate": "tsx src/jobs/simulate-round.job.ts",
     "cron:simulate:prod": "node dist/jobs/simulate-round.job.js",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "test:contract": "vitest run tests/order-events.contract.test.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -44,7 +45,8 @@
     "luxon": "3.5.0",
     "node-cron": "3.0.3",
     "pino": "9.5.0",
-    "zod": "3.23.8"
+    "zod": "3.23.8",
+    "prisma": "5.22.0"
   },
   "devDependencies": {
     "@eslint/js": "9.14.0",
@@ -55,7 +57,6 @@
     "eslint-config-prettier": "9.1.0",
     "pino-pretty": "13.0.0",
     "prettier": "3.3.3",
-    "prisma": "5.22.0",
     "tsx": "4.19.2",
     "typescript": "5.6.3",
     "typescript-eslint": "8.14.0",

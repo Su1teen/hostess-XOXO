@@ -1,4 +1,5 @@
 import type { ExchangeProduct, PrismaClient } from '@prisma/client';
+import { lockExchange, OrderEventsService } from '../command-center/order-events.service.js';
 import { CURRENCY } from '../../config/constants.js';
 import { conflict, notFound, validationError } from '../../lib/errors.js';
 import { toNumber } from '../../lib/money.js';
@@ -31,6 +32,8 @@ export interface BartenderProductDto {
   priceStep: number;
   currentDiscountPercent: number;
   salesQuantity: number;
+  qrSalesQuantity?: number;
+  manualSalesQuantity?: number;
   manualPriceAppliedAt: string | null;
   updatedAt: string;
 }
@@ -68,16 +71,22 @@ export class BartenderService {
         ? this.prisma.exchangeSale.findMany({ where: { roundId: round.id } })
         : Promise.resolve([]),
     ]);
-    const salesByProduct = new Map(
-      sales.map((sale) => [sale.exchangeProductId ?? '', sale.quantity]),
-    );
+    const salesByProduct = new Map<string, number>();
+    for (const sale of sales) if (sale.exchangeProductId) salesByProduct.set(sale.exchangeProductId, (salesByProduct.get(sale.exchangeProductId) ?? 0) + sale.quantity);
+    const qrRows = round ? await this.prisma.exchangeOrderEvent.groupBy({
+      by: ['exchangeProductId', 'eventType'], where: { roundId: round.id }, _sum: { quantity: true },
+    }) : [];
+    const qrByProduct = new Map<string, number>();
+    for (const row of qrRows) qrByProduct.set(row.exchangeProductId, (qrByProduct.get(row.exchangeProductId) ?? 0) + (row.eventType === 'ORDER_ACCEPTED' ? 1 : -1) * (row._sum.quantity ?? 0));
     return {
       generatedAt: new Date().toISOString(),
       currency: CURRENCY,
       roundId: round?.id ?? null,
-      products: products.map((product) =>
-        toProductDto(product, salesByProduct.get(product.id) ?? 0),
-      ),
+      products: products.map((product) => ({
+        ...toProductDto(product, salesByProduct.get(product.id) ?? 0),
+        manualSalesQuantity: salesByProduct.get(product.id) ?? 0,
+        qrSalesQuantity: qrByProduct.get(product.id) ?? 0,
+      })),
     };
   }
 
@@ -97,6 +106,7 @@ export class BartenderService {
     if (!round) throw notFound('Активный раунд не найден', 'ROUND_NOT_FOUND');
 
     const result = await this.prisma.$transaction(async (tx) => {
+      await lockExchange(tx);
       const currentRound = await tx.priceRound.findUnique({ where: { id: round.id } });
       if (!currentRound) throw notFound('Раунд не найден', 'ROUND_NOT_FOUND');
       if (currentRound.status !== 'PUBLISHED' || currentRound.endsAt <= new Date()) {
@@ -191,6 +201,7 @@ export class BartenderService {
     if (!round) throw notFound('Активный раунд не найден', 'ROUND_NOT_FOUND');
 
     const result = await this.prisma.$transaction(async (tx) => {
+      await lockExchange(tx);
       const currentRound = await tx.priceRound.findUnique({ where: { id: round.id } });
       if (!currentRound) throw notFound('Раунд не найден', 'ROUND_NOT_FOUND');
       if (currentRound.status !== 'PUBLISHED' || currentRound.endsAt <= new Date()) {
@@ -295,6 +306,7 @@ export class BartenderService {
       }),
     ]);
 
+    const qrDiagnostics = round ? await new OrderEventsService(this.prisma).diagnostics(round.id) : null;
     const now = Date.now();
     const endsAt = round?.endsAt ?? null;
     return {
@@ -317,6 +329,8 @@ export class BartenderService {
       nextRoundStartsAt: endsAt ? endsAt.toISOString() : null,
       secondsRemaining: endsAt ? Math.max(0, Math.floor((endsAt.getTime() - now) / 1000)) : null,
       currentRoundSales: salesAggregate?._sum.quantity ?? 0,
+      currentRoundManualSales: salesAggregate?._sum.quantity ?? 0,
+      currentRoundQrSales: qrDiagnostics?.reconciliation.reduce((sum, row) => sum + row.qrQuantity, 0) ?? 0,
       lastPriceAppliedAt: lastApplied?.manualPriceAppliedAt?.toISOString() ?? null,
     };
   }
