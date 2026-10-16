@@ -149,12 +149,40 @@ export async function consumeQrDemand(tx: Prisma.TransactionClient, at: Date, ma
 /** Consume only the QR inputs captured by an explicitly published simulation. */
 export async function applyQrPreview(tx: Prisma.TransactionClient, roundId: string, prices: Array<{calculationInput: Prisma.JsonValue}>) {
   const ids = new Set<string>();
+  const round = await tx.priceRound.findUniqueOrThrow({ where: { id: roundId } });
+  const sourceRoundIds = new Set<string>();
+  let manualSnapshot: Prisma.JsonValue | undefined;
   for (const price of prices) {
     const input = price.calculationInput;
     if (input && typeof input === 'object' && !Array.isArray(input)) {
       const captured = input.qrDemandEventIds;
       if (Array.isArray(captured)) for (const id of captured) if (typeof id === 'string') ids.add(id);
+      if (Array.isArray(input.manualSourceRoundIds)) {
+        for (const id of input.manualSourceRoundIds) if (typeof id === 'string') sourceRoundIds.add(id);
+        manualSnapshot = input.manualSourceSales;
+      }
     }
+  }
+  if (manualSnapshot !== undefined) {
+    if (round.startsAt > new Date()) throw conflict('A demand preview cannot be published before its window starts');
+    const sources = await tx.priceRound.findMany({
+      where: { organizationId: round.organizationId, status: 'PUBLISHED', endsAt: { lte: round.startsAt } },
+      orderBy: { id: 'asc' },
+    });
+    const sourceIds = sources.map((source) => source.id);
+    const sales = await tx.exchangeSale.findMany({ where: { roundId: { in: sourceIds } }, orderBy: { id: 'asc' } });
+    const eligible = await consumeQrDemand(tx, round.startsAt, false);
+    if (JSON.stringify(sourceIds) !== JSON.stringify([...sourceRoundIds].sort()) ||
+      JSON.stringify(sales.map((sale) => ({ id: sale.id, quantity: sale.quantity }))) !== JSON.stringify(manualSnapshot) ||
+      eligible.ids.length !== ids.size || eligible.ids.some((id) => !ids.has(id))) {
+      throw conflict('Demand changed since simulation; use a fresh round calculation');
+    }
+    await tx.priceRound.updateMany({ where: { id: { in: sourceIds } }, data: { status: 'CLOSED' } });
+  } else if (prices.some((price) => {
+    const input = price.calculationInput;
+    return input && typeof input === 'object' && !Array.isArray(input) && input.algorithm === 'discrete-price-levels-v1';
+  })) {
+    throw conflict('Legacy preview lacks source accounting; use a fresh round calculation');
   }
   if (!ids.size) return;
   const pending = await tx.exchangeOrderEvent.count({where:{id:{in:[...ids]},processingStatus:'PENDING'}});

@@ -27,7 +27,8 @@
     "cron:simulate": "tsx src/jobs/simulate-round.job.ts",
     "cron:simulate:prod": "node dist/jobs/simulate-round.job.js",
     "postinstall": "prisma generate",
-    "test:contract": "vitest run tests/order-events.contract.test.ts"
+    "test:contract": "vitest run tests/order-events.contract.test.ts",
+    "test:command-center-e2e": "tsx scripts/command-center-e2e.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
