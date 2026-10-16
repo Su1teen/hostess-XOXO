@@ -12,6 +12,8 @@ import { ExchangeService } from '../src/modules/exchange/exchange.service.js';
 import { publicRoutes } from '../src/modules/public-api/public.routes.js';
 import { commandCenterRoutes } from '../src/modules/command-center/command.routes.js';
 import { AuditService } from '../src/services/audit.service.js';
+import { buildApp } from '../src/app.js';
+import cron from 'node-cron';
 
 const url = process.env.QR_TEST_DATABASE_URL;
 // Hard guard: this suite deletes fixtures, and must never accept an application DB.
@@ -228,5 +230,27 @@ describe.skipIf(!url)('QR events on real PostgreSQL', () => {
     const response=await app.inject({method:'POST',url:'/api/v1/command-center/order-events',headers:{'x-command-center-key':env.COMMAND_CENTER_SERVICE_KEY!},payload:event()});
     expect(response.statusCode).toBe(503); expect(response.json().error.retryable).toBe(true);
     await app.close(); await offline.$disconnect();
+  });
+  it('boots the complete application with compatible HTTP plugins, CORS and bartender sessions', async () => {
+    const previous=process.env.DATABASE_URL;
+    process.env.DATABASE_URL=url;
+    const app=await buildApp({...env,NODE_ENV:'test',LOG_LEVEL:'silent',CORS_ORIGINS:['https://hostes.online','https://barboard-exchange.sovetovsultann.workers.dev']});
+    try {
+      for (const path of ['/health','/api/v1/public/snapshot','/docs/json','/docs/static/swagger-ui.css']) expect((await app.inject({url:path})).statusCode).toBe(200);
+      for (const origin of ['https://hostes.online','https://barboard-exchange.sovetovsultann.workers.dev']) {
+        const response=await app.inject({method:'OPTIONS',url:'/api/v1/public/snapshot',headers:{origin,'access-control-request-method':'GET'}});
+        expect(response.headers['access-control-allow-origin']).toBe(origin);
+      }
+      expect((await app.inject({url:'/health',headers:{origin:'https://untrusted.example'}})).headers['access-control-allow-origin']).toBeUndefined();
+      const login=await app.inject({method:'POST',url:'/api/v1/bartender/auth',payload:{pin:env.BARTENDER_PIN}});
+      expect(login.statusCode).toBe(200);
+      expect((await app.inject({url:'/api/v1/bartender/exchange/products',headers:{'x-bartender-token':login.json().token}})).statusCode).toBe(200);
+      expect((await app.inject({url:'/api/v1/command-center/order-events/diagnostics',headers:{'x-command-center-key':env.COMMAND_CENTER_SERVICE_KEY!}})).statusCode).toBe(200);
+      const task=cron.schedule('* * * * *',()=>{}, {scheduled:false});
+      task.start(); task.stop();
+    } finally {
+      await app.close();
+      if (previous===undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL=previous;
+    }
   });
 });

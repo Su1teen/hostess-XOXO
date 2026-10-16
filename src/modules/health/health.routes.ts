@@ -11,7 +11,7 @@ interface HealthResponse {
   timestamp: string;
 }
 
-const healthSchema = {
+const healthySchema = {
   tags: ['Health'],
   summary: 'Статус API и PostgreSQL',
   response: {
@@ -34,6 +34,12 @@ const healthSchema = {
       },
     },
   },
+} as const;
+
+// Database outages use the same safe body with a non-success status.
+const healthSchema = {
+  ...healthySchema,
+  response: { ...healthySchema.response, 503: healthySchema.response[200] },
 } as const;
 
 export async function healthRoutes(app: FastifyInstance): Promise<void> {
