@@ -78,7 +78,7 @@ Example: accepted at 19:14:59 in round A, delivered at 19:15:03 after B is publi
 
 If a round is already PUBLISHED, transitionRound never deletes/recreates its prices. Pending QR demand and unclosed manual counters remain available for the following transition. All ended rounds being closed are aggregated, including recovery after downtime. Inactive products retain history but do not receive new prices.
 
-simulateRound is a dry run. It reads eligible pending demand but does not consume it; automatic transition recalculates under the lock. Manual approval/publishing of previews remains an administrative operation; do not use preview publications as the QR demand-consumption scheduler.
+simulateRound is a dry run. It reads eligible pending demand but does not consume it; automatic transition recalculates under the lock. Explicit preview publication shares the same lock and consumes the exact captured QR event IDs. A stale preview whose inputs have already been consumed is rejected (HTTP 409 CONFLICT); it cannot apply demand twice. Automatic transitions remain the normal scheduler.
 
 ## Preventing cross-source double counting
 
@@ -115,3 +115,5 @@ Rollback: set the flag false, retain queued outbox events and additive tables, t
 CI provisions isolated PostgreSQL databases, never production data. QR_TEST_DATABASE_URL must name qr_integration_test (the test suite enforces this). The existing exchange regression suite uses a separate exchange_regression_test database. The workflow runs all tests and schema checks and repeats migrate deploy to detect non-idempotent deployment behavior.
 
 Local tools became unavailable during implementation; GitHub CI is the authoritative execution record for the final commit. No production write/real guest purchase is implied by unit or CI success. Live end-to-end behavior also depends on the concurrently developed Command Center and Hostess frontend. Their docs/DINE_IN_API_CONTRACT.md was not available at implementation time, so tests enforce the supplied required wire fields and endpoint.
+
+Existing schema drift corrected: the historical products(is_active) index is now represented in Prisma schema; no index is dropped or rebuilt.

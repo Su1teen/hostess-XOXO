@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
+import { conflict } from '../../lib/errors.js';
 
 const uuid = z.string().uuid().transform((value) => value.toLowerCase());
 export const orderEventSchema = z.object({
@@ -143,4 +144,20 @@ export async function consumeQrDemand(tx: Prisma.TransactionClient, at: Date, ma
     quantities.set(event.exchangeProductId, (quantities.get(event.exchangeProductId) ?? 0) + (event.eventType === 'ORDER_ACCEPTED' ? 1 : -1) * event.quantity);
   }
   return { quantities, ids };
+}
+
+/** Consume only the QR inputs captured by an explicitly published simulation. */
+export async function applyQrPreview(tx: Prisma.TransactionClient, roundId: string, prices: Array<{calculationInput: Prisma.JsonValue}>) {
+  const ids = new Set<string>();
+  for (const price of prices) {
+    const input = price.calculationInput;
+    if (input && typeof input === 'object' && !Array.isArray(input)) {
+      const captured = input.qrDemandEventIds;
+      if (Array.isArray(captured)) for (const id of captured) if (typeof id === 'string') ids.add(id);
+    }
+  }
+  if (!ids.size) return;
+  const pending = await tx.exchangeOrderEvent.count({where:{id:{in:[...ids]},processingStatus:'PENDING'}});
+  if (pending !== ids.size) throw conflict('QR inputs have already been consumed; recalculate the round');
+  await tx.exchangeOrderEvent.updateMany({where:{id:{in:[...ids]}},data:{processingStatus:'APPLIED',processedAt:new Date(),appliedToRoundId:roundId}});
 }

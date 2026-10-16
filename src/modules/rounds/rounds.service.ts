@@ -1,6 +1,6 @@
 import type { Prisma, PriceRound, PrismaClient, RoundStatus } from '@prisma/client';
 import { PRICE_ALGORITHM_VERSION, TRIGGER_SOURCE } from '../../config/constants.js';
-import { consumeQrDemand } from '../command-center/order-events.service.js';
+import { consumeQrDemand, applyQrPreview, lockExchange } from '../command-center/order-events.service.js';
 import type { AppEnv } from '../../config/env.js';
 import {
   conflict,
@@ -208,6 +208,7 @@ export class RoundsService {
         changePercent: roundChange.toString(),
         calculationInput: {
           algorithm: 'discrete-price-levels-v1',
+          qrDemandEventIds: qrPreview.ids,
           currentLevel,
           levelDelta,
           salesQuantity,
@@ -607,6 +608,10 @@ export class RoundsService {
     if (round.prices.length === 0) throw noExchangeProducts();
 
     const published = await this.prisma.$transaction(async (tx) => {
+      await lockExchange(tx);
+      const latest = await tx.priceRound.findUniqueOrThrow({where:{id:round.id}});
+      if (!canTransition(latest.status, 'PUBLISHED')) throw invalidRoundTransition(latest.status, 'PUBLISHED');
+      await applyQrPreview(tx, round.id, round.prices);
       for (const price of round.prices) {
         await tx.roundPrice.update({
           where: { id: price.id },

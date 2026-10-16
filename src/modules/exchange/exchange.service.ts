@@ -1,3 +1,4 @@
+import { applyQrPreview, lockExchange } from '../command-center/order-events.service.js';
 import type { PrismaClient } from '@prisma/client';
 import { Decimal } from 'decimal.js';
 import {
@@ -289,10 +290,13 @@ export class ExchangeService {
   /** Публикует рассчитанные цены раунда и делает их каноническими. */
   private async publishRoundPrices(roundId: string) {
     return this.prisma.$transaction(async (tx) => {
+      await lockExchange(tx);
       const round = await tx.priceRound.findUniqueOrThrow({
         where: { id: roundId },
         include: ROUND_INCLUDE,
       });
+      if (round.status === 'PUBLISHED') return round;
+      await applyQrPreview(tx, round.id, round.prices);
       for (const price of round.prices) {
         if (!price.exchangeProductId || !price.exchangeProduct) continue;
         const discount = calculateDiscountPercent(

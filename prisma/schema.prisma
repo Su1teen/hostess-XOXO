@@ -191,6 +191,7 @@ model Product {
   crashEvents  CrashEvent[]
 
   @@unique([organizationId, iikoItemId, iikoSizeId])
+  @@index([isActive])
   @@index([name])
   @@index([displayName])
   @@index([categoryName])

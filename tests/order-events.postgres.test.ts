@@ -139,6 +139,16 @@ describe.skipIf(!url)('QR events on real PostgreSQL', () => {
     const next=await rounds.transitionRound(new Date(activeEnd.getTime()+15*60_000));
     expect(Number(next!.prices[0]!.salesQuantity)).toBe(7);
   });
+  it('consumes QR inputs once when a simulation is explicitly published',async()=>{
+    const input=event(); await service.ingest(input,at(6));
+    const preview=await rounds.simulateRound({startsAt:at(15)});
+    expect(Number(preview.round.prices[0]!.salesQuantity)).toBe(3);
+    await rounds.approveRound(preview.round.id);
+    await rounds.publishRound(preview.round.id);
+    expect((await prisma.exchangeOrderEvent.findFirstOrThrow()).processingStatus).toBe('APPLIED');
+    const next=await rounds.transitionRound(at(30));
+    expect(Number(next!.prices[0]!.salesQuantity)).toBe(0);
+  });
   it('returns a retryable HTTP error against an actually unavailable PostgreSQL port',async()=>{
     const offline=new PrismaClient({datasources:{db:{url:'postgresql://postgres:test@127.0.0.1:1/qr_integration_test?connect_timeout=1'}}});
     const app=fastify(); app.decorate('env',env); app.decorate('prisma',offline); await app.register(orderEventsRoutes);
