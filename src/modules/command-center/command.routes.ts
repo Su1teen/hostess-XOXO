@@ -88,13 +88,23 @@ export async function commandCenterRoutes(app: FastifyInstance) {
       }).format(new Date());
       const start = new Date(`${key}T00:00:00+05:00`),
         end = new Date(start.getTime() + 86400000);
-      const sales =
+      const manualSales =
         filter === 'kitchen'
           ? []
           : await app.prisma.exchangeSale.findMany({
               where: { round: { startsAt: { gte: start, lt: end } } },
               include: { round: true, exchangeProduct: true, product: true },
             });
+      const qrEvents = filter === 'kitchen' ? [] : await app.prisma.exchangeOrderEvent.findMany({
+        where: { round: { startsAt: { gte: start, lt: end } } },
+        include: { round: true, exchangeProduct: true },
+      });
+      const qrOrderIds = new Set(qrEvents.filter((event) => event.eventType === 'ORDER_ACCEPTED').map((event) => event.commandCenterOrderId));
+      const sales = [...manualSales, ...qrEvents.map((event) => ({
+        priceAtSale: event.unitPriceSnapshot,
+        quantity: (event.eventType === 'ORDER_ACCEPTED' ? 1 : -1) * event.quantity,
+        round: event.round, exchangeProduct: event.exchangeProduct, product: null,
+      }))];
       let cents = 0,
         quantity = 0;
       const byHour = new Map<number, { cents: number; items: number }>(),
@@ -135,8 +145,10 @@ export async function commandCenterRoutes(app: FastifyInstance) {
           revenue: cents / 100,
           itemsSold: quantity,
           alcoholRevenue: cents / 100,
-          ordersCount: sales.length,
-          averageCheck: sales.length ? cents / 100 / sales.length : null,
+          ordersCount: null,
+          averageCheck: null,
+          qrOrdersCount: qrOrderIds.size,
+          salesLinesCount: sales.length,
         },
         hourly: [...byHour]
           .sort(([a], [b]) => a - b)
@@ -163,7 +175,13 @@ export async function commandCenterRoutes(app: FastifyInstance) {
             revenue: v.cents / 100,
             source: 'exchange',
           })),
-        sources: { exchangeLines: sales.length, iikoEvents: 0, iikoEventsWithoutPrice: 0 },
+        sources: {
+          exchangeLines: manualSales.length, manualLines: manualSales.length,
+          qrUniqueEvents: qrEvents.length,
+          qrNetUnits: qrEvents.reduce((sum, event) => sum + (event.eventType === 'ORDER_ACCEPTED' ? 1 : -1) * event.quantity, 0),
+          iikoEvents: 0, iikoEventsWithoutPrice: 0,
+          note: 'Exchange rows are sales counters, not customer checks. Gross snapshot revenue excludes loyalty. Manual quantities are offline-only.',
+        },
         generatedAt: new Date().toISOString(),
         dateLabel: new Intl.DateTimeFormat('ru-RU', {
           timeZone: 'Asia/Almaty',

@@ -1,5 +1,6 @@
 import type { Prisma, PriceRound, PrismaClient, RoundStatus } from '@prisma/client';
 import { PRICE_ALGORITHM_VERSION, TRIGGER_SOURCE } from '../../config/constants.js';
+import { consumeQrDemand } from '../command-center/order-events.service.js';
 import type { AppEnv } from '../../config/env.js';
 import {
   conflict,
@@ -153,7 +154,10 @@ export class RoundsService {
     const sales = currentRound
       ? await this.prisma.exchangeSale.findMany({ where: { roundId: currentRound.id } })
       : [];
-    const salesByProduct = new Map(sales.map((sale) => [sale.exchangeProductId, sale.quantity]));
+    const salesByProduct = new Map<string, number>();
+    for (const sale of sales) if (sale.exchangeProductId) salesByProduct.set(sale.exchangeProductId, (salesByProduct.get(sale.exchangeProductId) ?? 0) + sale.quantity);
+    const qrPreview = await consumeQrDemand(this.prisma, window.startsAt, false);
+    for (const [id, quantity] of qrPreview.quantities) salesByProduct.set(id, (salesByProduct.get(id) ?? 0) + Math.max(0, quantity));
     const totalSales = products.reduce(
       (sum, product) => sum + (salesByProduct.get(product.id) ?? 0),
       0,
@@ -301,6 +305,8 @@ export class RoundsService {
         });
         // Нечего закрывать — переход уже выполнен (идемпотентность).
         if (!closedRound) return { round: existing, closedRound: null, rows: [], salesTotal: 0 };
+        // A round already visible to guests is immutable. Pending demand waits for the following window.
+        if (existing?.status === 'PUBLISHED') return { round: existing, closedRound: null, rows: [], salesTotal: 0 };
 
         this.logger?.info({
           event: 'round_transition_started',
@@ -318,13 +324,15 @@ export class RoundsService {
         // Спрос закрытого раунда: именно SUM(quantity), а не COUNT(rows).
         const grouped = await tx.exchangeSale.groupBy({
           by: ['exchangeProductId'],
-          where: { roundId: closedRound.id, exchangeProductId: { not: null } },
+          where: { roundId: { in: endedRounds.map((round) => round.id) }, exchangeProductId: { not: null } },
           _sum: { quantity: true },
         });
         const quantities = new Map<string, number>();
         for (const row of grouped) {
           if (row.exchangeProductId) quantities.set(row.exchangeProductId, row._sum.quantity ?? 0);
         }
+        const qrDemand = await consumeQrDemand(tx, nextWindow.startsAt);
+        for (const [id, quantity] of qrDemand.quantities) quantities.set(id, (quantities.get(id) ?? 0) + Math.max(0, quantity));
         const salesTotal = products.reduce(
           (sum, product) => sum + (quantities.get(product.id) ?? 0),
           0,
@@ -475,6 +483,10 @@ export class RoundsService {
           });
         }
 
+        if (qrDemand.ids.length) await tx.exchangeOrderEvent.updateMany({
+          where: { id: { in: qrDemand.ids } },
+          data: { processingStatus: 'APPLIED', processedAt: now, appliedToRoundId: round.id },
+        });
         return { round, closedRound, rows, salesTotal };
       });
 

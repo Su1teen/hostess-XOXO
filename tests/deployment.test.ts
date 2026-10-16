@@ -9,4 +9,11 @@ describe('production exchange initialization', () => {
       'startCommand = "npm run start"',
     );
   });
+  it('runs migrations before deployment with a runtime Prisma CLI', () => {
+    expect(railwayConfig).toContain('preDeployCommand = "npm run db:migrate:deploy"');
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+    expect(pkg.dependencies.prisma).toBe('5.22.0');
+    expect(pkg.devDependencies.prisma).toBeUndefined();
+    expect(railwayConfig).not.toContain('db:seed &&');
+  });
 });

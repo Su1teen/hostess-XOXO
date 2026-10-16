@@ -23,6 +23,7 @@ function makePrisma(roundValue = round) {
     exchangeProductId: 'product-1',
   }));
   const tx = {
+    $executeRaw: vi.fn(async () => 1),
     priceRound: { findUnique: vi.fn(async () => roundValue) },
     exchangeProduct: { findFirst: vi.fn(async () => product) },
     exchangeSale: { upsert },

@@ -638,6 +638,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           <button type="button" data-bt-tab="clients" aria-selected="false">Гости</button>
           <button type="button" data-bt-tab="tables" aria-selected="false">Столы</button>
         </nav>
+        <p class="bt-meta">Вручную вводите только продажи вне QR. QR-заказы учтены автоматически; не добавляйте их повторно.</p>
         <div class="bt-controls">
           <input id="btSearch" type="search" placeholder="Найти товар" autocomplete="off" />
           <div id="btFilters" class="bt-filters"></div>
@@ -1351,6 +1352,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
             maxPrice: safeNumber(product.maxPrice, 0),
             priceLevelPercent: safePriceLevel(product.priceLevelPercent, product),
             currentDiscountPercent: safeNumber(product.currentDiscountPercent, 0),
+            qrSalesQuantity: Math.max(0, safeInteger(product.qrSalesQuantity, 0)),
             salesQuantity: Math.max(0, safeInteger(product.salesQuantity, safeInteger(product.quantity, 0))),
             manualPriceAppliedAt: typeof product.manualPriceAppliedAt === 'string' ? product.manualPriceAppliedAt : null,
           };
@@ -1383,7 +1385,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           el('btRound').textContent = round && round.endsAt ? 'до ' + time(round.endsAt) : 'раунд не начат';
           el('btUpdated').textContent = 'обновлено: ' + time(status.generatedAt) +
             ' · позиций: ' + status.activeProducts +
-            ' · продаж в раунде: ' + status.currentRoundSales +
+            ' · вручную: ' + status.currentRoundSales + ' · QR: ' + (status.currentRoundQrSales || 0) +
             ' · расчёт: ' + (status.running ? 'идёт' : 'пауза');
         }
 
@@ -1513,7 +1515,11 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
           saleSecondary.className = 'bt-sales';
           var quantityLabel = document.createElement('span');
           quantityLabel.className = 'bt-total-label';
-          quantityLabel.textContent = 'Продано';
+          quantityLabel.textContent = 'Вне QR';
+          var qrCount = document.createElement('span');
+          qrCount.className = 'bt-cat';
+          qrCount.textContent = 'QR: ' + product.qrSalesQuantity + ' · автоматически';
+          node.appendChild(qrCount);
           saleSecondary.appendChild(quantityLabel);
           var minus = document.createElement('button');
           minus.type = 'button';

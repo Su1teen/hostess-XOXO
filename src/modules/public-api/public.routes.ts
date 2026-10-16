@@ -1,6 +1,7 @@
 import type { ExchangeProduct } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
 import { API_PREFIX } from '../../config/constants.js';
+import { calculateDiscountPercent } from '../../services/discount.service.js';
 import { toNumber } from '../../lib/money.js';
 import { getNextRound } from '../../lib/time.js';
 import { getCanonicalPriceLevelPercent } from '../../services/price-engine.service.js';
@@ -162,6 +163,9 @@ function mapProducts(round: RoundWithPrices) {
     .filter((item) => item.exchangeProduct?.isActive && item.exchangeProductId)
     .map((item) => ({
       ...mapCatalogProduct(item.exchangeProduct!),
+      price: toNumber((item.publishedPrice ?? item.price).toString()),
+      priceLevelPercent: getCanonicalPriceLevelPercent({ originalPrice: item.exchangeProduct!.originalPrice, currentPrice: item.publishedPrice ?? item.price }),
+      discountPercent: Math.round(calculateDiscountPercent(item.exchangeProduct!.originalPrice, item.publishedPrice ?? item.price).toNumber()),
       previousPrice: item.previousPrice === null ? null : toNumber(item.previousPrice.toString()),
       changePercent: Number(item.changePercent.toString()),
     }))
