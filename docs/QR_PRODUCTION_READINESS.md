@@ -2,7 +2,7 @@
 
 ## Статус и проверенные версии
 
-**Live rollout: BLOCKED. Код receiver проверен; полная production-доставка пока не включена.** Не считать HTTP 200 от health/snapshot доказательством принятого заказа. Настоящий ACK подтверждён в изолированном межсервисном E2E; production-заказы и бонусные операции не создавались.
+**XOXO receiver включён и проверен в production. Полный live rollout: BLOCKED.** Отправитель остаётся выключенным; Hostess BFF возвращает configuration 503. Не считать HTTP 200 от health/snapshot доказательством принятого заказа. Настоящий ACK подтверждён в изолированном межсервисном E2E; production-заказы и бонусные операции не создавались.
 
 - Исходный XOXO: `e9bbe282fad44eeb441cd4d39051e41f861dc04d`.
 - Исправление учёта preview: `2164d54490a3bb3811fc46a0b019ee6d2976cf99`.
@@ -24,7 +24,7 @@ Railway project `hostess`, environment `production`; service `hostess-XOXO`. И�
 | HOSTESS_PUBLIC_ORIGIN | `https://hostes.online` |
 | XOXO CORS_ORIGINS | Был только `https://barboard-exchange.sovetovsultann.workers.dev` |
 
-После локальной проверки настроены `QR_ORDER_EVENTS_ENABLED=true` и CORS `https://barboard-exchange.sovetovsultann.workers.dev,https://hostes.online` с `--skip-deploys`. Их фактическое применение к запущенному контейнеру проверяется после доставки main в разделе ниже. Существующий доверенный биржевой frontend сохранён. Service key не добавлен в browser headers; ORDER_ACCEPTED/ORDER_CANCELLED контракт не менялся.
+После локальной проверки настроены `QR_ORDER_EVENTS_ENABLED=true` и CORS `https://barboard-exchange.sovetovsultann.workers.dev,https://hostes.online` с `--skip-deploys`. Их применение к новому запущенному контейнеру подтверждено после доставки main, см. финальный раздел. Существующий доверенный биржевой frontend сохранён. Service key не добавлен в browser headers; ORDER_ACCEPTED/ORDER_CANCELLED контракт не менялся.
 
 Env precedence: приложение получает Railway process.env, `getEnv()` кэширует результат `parseEnv()`. Загрузчика dotenv/переопределения флага в старте нет. Default false; true/yes/1/on включают флаг, false/no/0/off выключают. Изменение Railway variable требует нового запуска контейнера. Runtime start — только `npm run start`; Prisma deploy выполняется pre-deploy, seed/reset/db push на старте отсутствуют.
 
@@ -91,4 +91,13 @@ Checkout создал 1 anonymous order, 1 accepted outbox line. При выкл
 
 ## Финальная доставка
 
-Проверка фактического Railway deployment и post-deploy diagnostics дополняется после push. Значения ключей, токены QR и персональные данные в отчёт не включаются.
+- Проверенный и развёрнутый SHA: `1d8043785e6051b9d2ecc87fe0f03618d15e0ef7`. Он содержит весь код `aad6b28` и исходный отчёт. Последующее дополнение отчёта не меняет runtime-код.
+- [GitHub Actions 38982657288](https://github.com/Su1teen/hostess-XOXO/actions/runs/38982657288): **SUCCESS**, все CI steps пройдены на Linux/Node 22; 217 тестов, schema diff без изменений, повторные миграции no-op.
+- Railway deployment **`452858a1-de73-49b1-941d-df39ee271280` SUCCESS**. Pre-deploy `2026-10-16T23:43:51.545Z`: 10 migrations found, **No pending migrations to apply**. Runtime `23:43:59.982Z`: scheduler started, server listening :3000. Production seed/reset отсутствует.
+- Read-only post-deploy snapshot **2026-10-16T23:44:42.647Z** (17 октября 04:44 UTC+05): health=ok, database=ok; diagnostics **enabled=true**, events=[], deliveries=0, duplicates=0, rejectedAttempts=0; sender outbox=`no`; ключи по-прежнему совпадают; products/sales API — HTTP 200; snapshot=ok, 27 товаров.
+- CORS preflight: `https://hostes.online` → **204**, точный allow-origin; сохранённый биржевой workers.dev → **204**, точный allow-origin; посторонний origin → **404 без allow-origin**. Исходные доверенные адреса не потеряны.
+- Живая 15-минутная граница после deployment подтверждена двумя snapshot: 04:30–04:45 раунд `4dd2fe0f-a44f-45c8-b153-b608d0dca721`; затем `2026-10-16T23:45:36.494Z` → новый **PUBLISHED 04:45–05:00**, `9e6105c1-d901-4b06-9055-de3caa710d1b`. Тестовых sales writes не было.
+- Ограниченный запрос Railway HTTP logs за последние 10 минут с status>=500 не вернул записей. Известные startup warnings: npm config production и Fastify FSTDEP023 о disableRequestLogging; это не провал запуска/ingestion. Полную ретеншн-статистику ошибок этим запросом не утверждаем.
+- Прямой публичный read-only запрос `https://hostes.online/api/guest/v1/dine-in/menu?venue=xoxo` всё ещё **503 SERVICE_UNAVAILABLE / «Сервис пока не настроен»**. Поэтому общий READY не присваивается, outbox не включается. Дальнейшее действие относится к Hostess BFF rollout и согласованной активации Command Center, а не к изменению ORDER_ACCEPTED/ORDER_CANCELLED.
+
+Значения ключей, токены QR и персональные данные в отчёт не включены. Локальный PostgreSQL этого аудита остановлен; production-процессы вручную не перезапускались.
