@@ -5,7 +5,7 @@
  * если задан E2E_DATABASE_URL — база ОЧИЩАЕТСЯ, поэтому указывать нужно
  * выделенную тестовую БД, а не dev/prod:
  *
- *   E2E_DATABASE_URL="postgresql://postgres:postgres@localhost:5433/bar_exchange_e2e?schema=public" npm test
+ *   E2E_DATABASE_URL="postgresql://postgres:postgres@localhost:5433/exchange_regression_test?schema=public" npm test
  */
 import { PrismaClient } from '@prisma/client';
 import fastify from 'fastify';
@@ -18,7 +18,10 @@ import { ExchangeService } from '../src/modules/exchange/exchange.service.js';
 import { RoundsService } from '../src/modules/rounds/rounds.service.js';
 import { publicRoutes } from '../src/modules/public-api/public.routes.js';
 
-const DATABASE_URL = process.env.E2E_DATABASE_URL;
+const DATABASE_URL = process.env.E2E_DATABASE_URL || undefined;
+if (DATABASE_URL && new URL(DATABASE_URL).pathname !== '/exchange_regression_test') {
+  throw new Error('Use isolated exchange_regression_test database only');
+}
 const describeE2E = DATABASE_URL ? describe : describe.skip;
 
 const BUD = {

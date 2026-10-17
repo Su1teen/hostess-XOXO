@@ -2,7 +2,7 @@
 
 ## Ownership and audit
 
-Command Center owns guests, sessions, QR tables (17 physical tables), customer orders, loyalty and its transactional outbox. XOXO only owns exchange catalog, published prices, round demand and event accounting. No second customer order, wallet, database, broker or payment confirmation is created here. A pilot "assumed_paid" event is not bank settlement.
+Command Center owns guests, sessions, QR resources, customer orders, loyalty and its transactional outbox. Physical table mapping and booking capacity must be confirmed by Command Center; XOXO does not infer them from QR codes. The canonical public Hostess origin is https://hostes.online. XOXO only owns exchange catalog, published prices, round demand and event accounting. No second customer order, wallet, database, broker or payment confirmation is created here. A pilot "assumed_paid" event is not bank settlement.
 
 The existing manual path stores one ExchangeSale counter per round/product. SalesService previously attempted repeated INSERTs despite the unique key: it now uses atomic upsert and shares the round-transition lock. Bartender absolute/relative counters remain manual-only. Simulation now sums all quantities rather than taking the last row. iiko webhook events remain receipt-only and do not feed exchange demand; adding iiko as a sales source requires a cross-source order identity before enabling it.
 
@@ -78,7 +78,7 @@ Example: accepted at 19:14:59 in round A, delivered at 19:15:03 after B is publi
 
 If a round is already PUBLISHED, transitionRound never deletes/recreates its prices. Pending QR demand and unclosed manual counters remain available for the following transition. All ended rounds being closed are aggregated, including recovery after downtime. Inactive products retain history but do not receive new prices.
 
-simulateRound is a dry run. It reads eligible pending demand but does not consume it; automatic transition recalculates under the lock. Explicit preview publication shares the same lock and consumes the exact captured QR event IDs. A stale preview whose inputs have already been consumed is rejected (HTTP 409 CONFLICT); it cannot apply demand twice. Automatic transitions remain the normal scheduler.
+simulateRound is a dry run. It reads eligible pending demand but does not consume it; automatic transition recalculates under the lock. Explicit preview publication shares the same lock and consumes the exact captured QR event IDs. A stale preview whose inputs have already been consumed, or whose eligible acceptance/cancellation set changed after simulation, is rejected (HTTP 409 CONFLICT). Empty captured sets are checked too. Explicit preview publication is blocked if ended PUBLISHED source rounds still contain manual quantities: automatic transition must close and consume those counters atomically. This prevents consuming manual demand twice. Automatic transitions remain the normal scheduler.
 
 ## Preventing cross-source double counting
 
@@ -90,9 +90,9 @@ Command Center sales reporting includes signed QR event quantities and snapshot 
 
 ## Public pricing compatibility
 
-GET /api/v1/public/snapshot remains read-only and never starts a price-writing job. It returns the existing generatedAt, timezone, status, currentRound and products shapes. No active published round means no_published_round/currentRound=null: the catalog is not a quote and Command Center must refuse checkout until a valid round exists. IDs remain exchangeProduct UUIDs, not names or iiko IDs.
+All GET /api/v1/public endpoints are read-only and never start a price-writing job. The snapshot returns the existing generatedAt, timezone, status, currentRound and products shapes. No active published round means no_published_round/currentRound=null: the catalog is not a quote and Command Center must refuse checkout until a valid round exists. IDs remain exchangeProduct UUIDs, not names or iiko IDs. The products endpoint uses the same published price mapping as snapshot when a quote exists.
 
-The snapshot derives price and level/discount from the actual published RoundPrice, so live product metadata cannot silently relabel a stale quote. Product catalog, TV/current-round endpoints and categories remain compatible. Only the scheduler/administrative publisher advances pricing.
+The snapshot derives price and level/discount from the actual published RoundPrice, using its originalPrice and minPrice snapshots. Legacy rows missing originalPrice explicitly fall back to the catalog reference amount. Product catalog, TV/current-round endpoints and categories remain compatible. Only the scheduler/administrative publisher advances pricing.
 
 ## Railway deployment
 

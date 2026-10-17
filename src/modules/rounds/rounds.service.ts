@@ -611,7 +611,14 @@ export class RoundsService {
       await lockExchange(tx);
       const latest = await tx.priceRound.findUniqueOrThrow({where:{id:round.id}});
       if (!canTransition(latest.status, 'PUBLISHED')) throw invalidRoundTransition(latest.status, 'PUBLISHED');
-      await applyQrPreview(tx, round.id, round.prices);
+      await applyQrPreview(tx, round.id, round.prices, latest.startsAt);
+      // Manual counters have no consumption ledger. Only automatic transition
+      // closes their source rounds atomically; explicit preview must not count
+      // them once now and once again on the next automatic transition.
+      const unclosedManual = await tx.exchangeSale.count({
+        where: { quantity: { gt: 0 }, round: { organizationId: latest.organizationId, status: 'PUBLISHED', endsAt: { lte: latest.startsAt } } },
+      });
+      if (unclosedManual) throw conflict('Unclosed manual sales require automatic round transition; preview publication would double-count demand');
       for (const price of round.prices) {
         await tx.roundPrice.update({
           where: { id: price.id },
@@ -683,18 +690,23 @@ export class RoundsService {
       throw invalidRoundTransition(round.status, 'ROLLED_BACK');
     }
 
-    const previous = await this.prisma.priceRound.findFirst({
-      where: {
-        organizationId: round.organizationId,
-        status: 'PUBLISHED',
-        id: { not: round.id },
-        publishedAt: { not: null, lt: round.publishedAt ?? new Date() },
-      },
-      orderBy: { publishedAt: 'desc' },
-      include: ROUND_INCLUDE,
-    });
+    const outcome = await this.prisma.$transaction(async (tx) => {
+      await lockExchange(tx);
+      const latest = await tx.priceRound.findUniqueOrThrow({ where: { id: round.id } });
+      if (!canTransition(latest.status, 'ROLLED_BACK')) {
+        throw invalidRoundTransition(latest.status, 'ROLLED_BACK');
+      }
+      const previous = await tx.priceRound.findFirst({
+        where: {
+          organizationId: round.organizationId,
+          status: 'PUBLISHED',
+          id: { not: round.id },
+          publishedAt: { not: null, lt: latest.publishedAt ?? new Date() },
+        },
+        orderBy: { publishedAt: 'desc' },
+        include: ROUND_INCLUDE,
+      });
 
-    const result = await this.prisma.$transaction(async (tx) => {
       const rolledBack = await tx.priceRound.update({
         where: { id: round.id },
         data: { status: 'ROLLED_BACK' },
@@ -729,8 +741,9 @@ export class RoundsService {
           }
         }
       }
-      return rolledBack;
+      return { rolledBack, previous };
     });
+    const { rolledBack: result, previous } = outcome;
 
     await this.audit.log({
       action: 'ROUND_ROLLED_BACK',

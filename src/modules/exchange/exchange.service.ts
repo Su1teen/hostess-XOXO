@@ -7,6 +7,7 @@ import {
   EXCHANGE_TIMEZONE,
 } from './exchange.catalog.js';
 import { roundToStep } from '../../lib/money.js';
+import { conflict } from '../../lib/errors.js';
 import { getCurrentRound } from '../../lib/time.js';
 import { calculateDiscountPercent } from '../../services/discount.service.js';
 import { getCanonicalPriceLevelPercent } from '../../services/price-engine.service.js';
@@ -296,7 +297,11 @@ export class ExchangeService {
         include: ROUND_INCLUDE,
       });
       if (round.status === 'PUBLISHED') return round;
-      await applyQrPreview(tx, round.id, round.prices);
+      await applyQrPreview(tx, round.id, round.prices, round.startsAt);
+      const unclosedManual = await tx.exchangeSale.count({
+        where: { quantity: { gt: 0 }, round: { organizationId: round.organizationId, status: 'PUBLISHED', endsAt: { lte: round.startsAt } } },
+      });
+      if (unclosedManual) throw conflict('Unclosed manual sales require automatic round transition; preview publication would double-count demand');
       for (const price of round.prices) {
         if (!price.exchangeProductId || !price.exchangeProduct) continue;
         const discount = calculateDiscountPercent(

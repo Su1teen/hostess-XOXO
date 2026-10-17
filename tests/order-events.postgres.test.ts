@@ -13,9 +13,9 @@ import { publicRoutes } from '../src/modules/public-api/public.routes.js';
 import { commandCenterRoutes } from '../src/modules/command-center/command.routes.js';
 import { AuditService } from '../src/services/audit.service.js';
 
-const url = process.env.QR_TEST_DATABASE_URL;
+const url = process.env.QR_TEST_DATABASE_URL || undefined;
 // Hard guard: this suite deletes fixtures, and must never accept an application DB.
-if (url && !new URL(url).pathname.endsWith('/qr_integration_test')) throw new Error('Use isolated qr_integration_test database only');
+if (url && new URL(url).pathname !== '/qr_integration_test') throw new Error('Use isolated qr_integration_test database only');
 describe.skipIf(!url)('QR events on real PostgreSQL', () => {
   const prisma = new PrismaClient({datasources:{db:{url:url ?? 'postgresql://localhost:1/qr_integration_test'}}});
   const env = parseEnv({DATABASE_URL:url ?? 'postgresql://localhost:1/qr_integration_test',ADMIN_API_KEY:'0123456789abcdef',QR_ORDER_EVENTS_ENABLED:'true',COMMAND_CENTER_SERVICE_KEY:'test-service-key-at-least-32-characters',ROUND_SCHEDULER_ENABLED:'false'});
@@ -155,5 +155,28 @@ describe.skipIf(!url)('QR events on real PostgreSQL', () => {
     const response=await app.inject({method:'POST',url:'/api/v1/command-center/order-events',headers:{'x-command-center-key':env.COMMAND_CENTER_SERVICE_KEY!},payload:event()});
     expect(response.statusCode).toBe(503); expect(response.json().error.retryable).toBe(true);
     await app.close(); await offline.$disconnect();
+  });
+  it('rejects a preview changed by a late cancellation without consuming either event',async()=>{
+    const input=event(); await service.ingest(input,at(6));
+    const preview=await rounds.simulateRound({startsAt:at(15)});
+    await rounds.approveRound(preview.round.id);
+    await service.ingest({...input,eventId:randomUUID(),eventType:'ORDER_CANCELLED',occurredAt:at(8).toISOString()},at(9));
+    await expect(rounds.publishRound(preview.round.id)).rejects.toMatchObject({code:'CONFLICT'});
+    expect(await prisma.exchangeOrderEvent.count({where:{processingStatus:'PENDING'}})).toBe(2);
+    expect((await prisma.priceRound.findUniqueOrThrow({where:{id:preview.round.id}})).status).toBe('APPROVED');
+    const automatic=await rounds.transitionRound(at(15));
+    expect(Number(automatic!.prices[0]!.salesQuantity)).toBe(0);
+  });
+  it('rolls back preview QR consumption when unclosed manual counters require automatic transition',async()=>{
+    await prisma.exchangeSale.create({data:{roundId,exchangeProductId:productId,quantity:2,priceAtSale:1590}});
+    await service.ingest(event(),at(6));
+    const preview=await rounds.simulateRound({startsAt:at(15)});
+    await rounds.approveRound(preview.round.id);
+    await expect(rounds.publishRound(preview.round.id)).rejects.toMatchObject({code:'CONFLICT'});
+    expect(await prisma.exchangeOrderEvent.count({where:{processingStatus:'PENDING'}})).toBe(1);
+    const automatic=await rounds.transitionRound(at(15));
+    expect(Number(automatic!.prices[0]!.salesQuantity)).toBe(5);
+    const following=await rounds.transitionRound(at(30));
+    expect(Number(following!.prices[0]!.salesQuantity)).toBe(0);
   });
 });

@@ -67,11 +67,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
   const activeProducts = () =>
     app.prisma.exchangeProduct.findMany({ where: { isActive: true }, orderBy: { name: 'asc' } });
 
-  const buildPayload = async (advanceRound = true) => {
-    // Гарантирует, что раунд текущего окна опубликован (и что завершившийся раунд
-    // закрыт с пересчётом цен по продажам) до чтения. Идемпотентно и не пересчитывает
-    // цены, когда закрывать нечего.
-    if (advanceRound) await app.services.exchange.ensureCurrentRound();
+  const buildPayload = async () => {
     const round = await app.services.rounds.getCurrentPublishedRound();
     return {
       generatedAt: new Date().toISOString(),
@@ -95,7 +91,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     schema: { tags: ['Public'], response: { 200: publicPayloadSchema } },
   };
   // Read-only snapshot for guest BFF and quotes. Scheduler owns round advancement.
-  app.get(`${API_PREFIX}/public/snapshot`, publicOptions, async () => buildPayload(false));
+  app.get(`${API_PREFIX}/public/snapshot`, publicOptions, async () => buildPayload());
   app.get(`${API_PREFIX}/public/current-round`, publicOptions, async () => buildPayload());
   app.get(`${API_PREFIX}/public/rounds/current`, publicOptions, async () => buildPayload());
   app.get(`${API_PREFIX}/public/prices`, publicOptions, async () => buildPayload());
@@ -121,7 +117,6 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     `${API_PREFIX}/public/products`,
     { ...publicOptions, schema: { tags: ['Public'] } },
     async () => {
-      await app.services.exchange.ensureCurrentRound();
       const [products, round] = await Promise.all([
         app.prisma.exchangeProduct.findMany({
           where: { isActive: true },
@@ -129,43 +124,26 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
         }),
         app.services.rounds.getCurrentPublishedRound(),
       ]);
-      const prices = new Map(
-        (round?.prices ?? [])
-          .filter((item) => item.exchangeProductId)
-          .map((item) => [item.exchangeProductId!, item]),
-      );
       return {
         generatedAt: new Date().toISOString(),
         timezone: app.env.APP_TIMEZONE,
-        products: products.map((product) => {
-          const item = prices.get(product.id);
-          return {
-            ...mapCatalogProduct(product),
-            previousPrice:
-              item?.previousPrice === null || item?.previousPrice === undefined
-                ? null
-                : toNumber(item.previousPrice.toString()),
-            changePercent: item ? Number(item.changePercent.toString()) : 0,
-          };
-        }),
+        products: round ? mapProducts(round) : mapCatalog(products),
       };
     },
   );
 }
 
-/**
- * Цена для гостевого табло берётся из exchange_products.currentPrice:
- * это то же значение, которое пишет панель бармена и расчёт раунда.
- * Доступность определяется только isActive биржевой позиции, а не iiko.
- */
+/** Published round amounts remain stable when mutable catalog settings change. */
 function mapProducts(round: RoundWithPrices) {
   return round.prices
     .filter((item) => item.exchangeProduct?.isActive && item.exchangeProductId)
     .map((item) => ({
       ...mapCatalogProduct(item.exchangeProduct!),
       price: toNumber((item.publishedPrice ?? item.price).toString()),
-      priceLevelPercent: getCanonicalPriceLevelPercent({ originalPrice: item.exchangeProduct!.originalPrice, currentPrice: item.publishedPrice ?? item.price }),
-      discountPercent: Math.round(calculateDiscountPercent(item.exchangeProduct!.originalPrice, item.publishedPrice ?? item.price).toNumber()),
+      originalPrice: toNumber((item.originalPrice ?? item.exchangeProduct!.originalPrice).toString()),
+      minPrice: toNumber(item.minPrice.toString()),
+      priceLevelPercent: getCanonicalPriceLevelPercent({ originalPrice: item.originalPrice ?? item.exchangeProduct!.originalPrice, currentPrice: item.publishedPrice ?? item.price }),
+      discountPercent: Math.round(calculateDiscountPercent(item.originalPrice ?? item.exchangeProduct!.originalPrice, item.publishedPrice ?? item.price).toNumber()),
       previousPrice: item.previousPrice === null ? null : toNumber(item.previousPrice.toString()),
       changePercent: Number(item.changePercent.toString()),
     }))

@@ -147,14 +147,25 @@ export async function consumeQrDemand(tx: Prisma.TransactionClient, at: Date, ma
 }
 
 /** Consume only the QR inputs captured by an explicitly published simulation. */
-export async function applyQrPreview(tx: Prisma.TransactionClient, roundId: string, prices: Array<{calculationInput: Prisma.JsonValue}>) {
+export async function applyQrPreview(tx: Prisma.TransactionClient, roundId: string, prices: Array<{calculationInput: Prisma.JsonValue}>, cutoff: Date) {
   const ids = new Set<string>();
+  let hasSnapshot = false;
   for (const price of prices) {
     const input = price.calculationInput;
     if (input && typeof input === 'object' && !Array.isArray(input)) {
       const captured = input.qrDemandEventIds;
-      if (Array.isArray(captured)) for (const id of captured) if (typeof id === 'string') ids.add(id);
+      if (Array.isArray(captured)) {
+        hasSnapshot = true;
+        for (const id of captured) if (typeof id === 'string') ids.add(id);
+      }
     }
+  }
+  if (!hasSnapshot) return;
+  // A cancellation/new acceptance arriving after simulation changes the demand,
+  // even when every originally captured event is still PENDING.
+  const current = await consumeQrDemand(tx, cutoff, false);
+  if (current.ids.length !== ids.size || current.ids.some((id) => !ids.has(id))) {
+    throw conflict('QR inputs changed after simulation; recalculate the round');
   }
   if (!ids.size) return;
   const pending = await tx.exchangeOrderEvent.count({where:{id:{in:[...ids]},processingStatus:'PENDING'}});
