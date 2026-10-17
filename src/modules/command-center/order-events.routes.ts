@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyError } from 'fastify';
 import { z } from 'zod';
 import { safeCompare } from '../../lib/idempotency.js';
 import { OrderEventError, OrderEventsService, orderEventSchema } from './order-events.service.js';
@@ -11,7 +11,7 @@ export async function orderEventsRoutes(app: FastifyInstance) {
       return reply.code(401).send({ accepted: false, error: { code: 'UNAUTHORIZED', retryable: false } });
     }
   });
-  app.setErrorHandler(async (error, request, reply) => {
+  app.setErrorHandler<FastifyError>(async (error, request, reply) => {
     const known = error instanceof OrderEventError;
     const status = known ? error.statusCode : (error.statusCode && error.statusCode < 500 ? error.statusCode : 503);
     const retryable = known ? error.retryable : status >= 500 || status === 429;

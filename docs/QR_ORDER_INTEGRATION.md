@@ -2,7 +2,7 @@
 
 ## Ownership and audit
 
-Command Center owns guests, sessions, QR resources, customer orders, loyalty and its transactional outbox. Physical table mapping and booking capacity must be confirmed by Command Center; XOXO does not infer them from QR codes. The canonical public Hostess origin is https://hostes.online. XOXO only owns exchange catalog, published prices, round demand and event accounting. No second customer order, wallet, database, broker or payment confirmation is created here. A pilot "assumed_paid" event is not bank settlement.
+Command Center owns guests, sessions, QR tables (17 physical tables), customer orders, loyalty and its transactional outbox. XOXO only owns exchange catalog, published prices, round demand and event accounting. No second customer order, wallet, database, broker or payment confirmation is created here. A pilot "assumed_paid" event is not bank settlement.
 
 The existing manual path stores one ExchangeSale counter per round/product. SalesService previously attempted repeated INSERTs despite the unique key: it now uses atomic upsert and shares the round-transition lock. Bartender absolute/relative counters remain manual-only. Simulation now sums all quantities rather than taking the last row. iiko webhook events remain receipt-only and do not feed exchange demand; adding iiko as a sales source requires a cross-source order identity before enabling it.
 
@@ -78,7 +78,7 @@ Example: accepted at 19:14:59 in round A, delivered at 19:15:03 after B is publi
 
 If a round is already PUBLISHED, transitionRound never deletes/recreates its prices. Pending QR demand and unclosed manual counters remain available for the following transition. All ended rounds being closed are aggregated, including recovery after downtime. Inactive products retain history but do not receive new prices.
 
-simulateRound is a dry run. It reads eligible pending demand but does not consume it; automatic transition recalculates under the lock. Explicit preview publication shares the same lock and consumes the exact captured QR event IDs. A stale preview whose inputs have already been consumed, or whose eligible acceptance/cancellation set changed after simulation, is rejected (HTTP 409 CONFLICT). Empty captured sets are checked too. Explicit preview publication is blocked if ended PUBLISHED source rounds still contain manual quantities: automatic transition must close and consume those counters atomically. This prevents consuming manual demand twice. Automatic transitions remain the normal scheduler.
+simulateRound is a dry run. It snapshots eligible pending QR demand, ended source rounds and manual counters under the shared lock without consuming them. Explicit publication revalidates that snapshot under the same lock, consumes the exact QR event IDs and closes the captured manual source rounds in its publication transaction. A preview cannot publish before its window starts. Changed manual counters, new eligible acceptances/cancellations, previously consumed inputs and legacy previews without source accounting are rejected (HTTP 409 CONFLICT); use the automatic transition to recalculate. Automatic transitions remain the normal scheduler. Published manual demand cannot be counted again at the next transition.
 
 ## Preventing cross-source double counting
 
@@ -90,9 +90,9 @@ Command Center sales reporting includes signed QR event quantities and snapshot 
 
 ## Public pricing compatibility
 
-All GET /api/v1/public endpoints are read-only and never start a price-writing job. The snapshot returns the existing generatedAt, timezone, status, currentRound and products shapes. No active published round means no_published_round/currentRound=null: the catalog is not a quote and Command Center must refuse checkout until a valid round exists. IDs remain exchangeProduct UUIDs, not names or iiko IDs. The products endpoint uses the same published price mapping as snapshot when a quote exists.
+GET /api/v1/public/snapshot remains read-only and never starts a price-writing job. It returns the existing generatedAt, timezone, status, currentRound and products shapes. No active published round means no_published_round/currentRound=null: the catalog is not a quote and Command Center must refuse checkout until a valid round exists. IDs remain exchangeProduct UUIDs, not names or iiko IDs.
 
-The snapshot derives price and level/discount from the actual published RoundPrice, using its originalPrice and minPrice snapshots. Legacy rows missing originalPrice explicitly fall back to the catalog reference amount. Product catalog, TV/current-round endpoints and categories remain compatible. Only the scheduler/administrative publisher advances pricing.
+The snapshot derives price and level/discount from the actual published RoundPrice, so live product metadata cannot silently relabel a stale quote. Product catalog, TV/current-round endpoints and categories remain compatible. Only the scheduler/administrative publisher advances pricing.
 
 ## Railway deployment
 
@@ -114,6 +114,14 @@ Rollback: set the flag false, retain queued outbox events and additive tables, t
 
 CI provisions isolated PostgreSQL databases, never production data. QR_TEST_DATABASE_URL must name qr_integration_test (the test suite enforces this). The existing exchange regression suite uses a separate exchange_regression_test database. The workflow runs all tests and schema checks and repeats migrate deploy to detect non-idempotent deployment behavior.
 
-Local tools became unavailable during implementation; GitHub CI is the authoritative execution record for the final commit. No production write/real guest purchase is implied by unit or CI success. Live end-to-end behavior also depends on the concurrently developed Command Center and Hostess frontend. Their docs/DINE_IN_API_CONTRACT.md was not available at implementation time, so tests enforce the supplied required wire fields and endpoint.
+The final production audit and exact validation SHAs are recorded in QR_PRODUCTION_READINESS.md. The actual Command Center DINE_IN_API_CONTRACT.md and outbox implementation were inspected; no wire changes were required. Local tests include real PostgreSQL and real HTTP checkout/outbox/delivery/cancellation between the two services. No production guest purchase is implied by test success. Live end-to-end behavior also depends on the Command Center outbox and Hostess frontend rollout.
+
+### Reproduce the cross-service test
+
+Use Node 22 and a checkout of Command Center with dependencies installed. Create two fresh, empty local databases named `xoxo_cross_test` and `command_cross_test`; the harness refuses other names and non-local hosts. Set `CROSS_RECEIVER_DATABASE_URL`, `CROSS_SENDER_DATABASE_URL`, and `COMMAND_CENTER_SOURCE_ROOT` to those test connections and the sender checkout. Apply XOXO migrations with `DATABASE_URL=$CROSS_RECEIVER_DATABASE_URL npm run db:migrate:deploy`, then run `npm run test:command-center-e2e`. The harness applies only Command Center SQL migrations to the fresh sender test database; XOXO Prisma never manages its tables.
+
+It uses a real local HTTP listener and the real Command Center checkout/outbox: disabled receiver retains a retryable event, enabling it yields a matching ACK and delivered outbox row, replay remains one sale, full cancellation delivers and nets demand to zero, and the original published price stays 1590 KZT. Recreate only these disposable local databases before rerunning; no production credentials are used.
+
+The public Hostess origin is `https://hostes.online`. Add it to XOXO `CORS_ORIGINS` while retaining other required trusted frontend origins. Service keys remain server-side and are not added to browser CORS headers.
 
 Existing schema drift corrected: the historical products(is_active) index is now represented in Prisma schema; no index is dropped or rebuilt.

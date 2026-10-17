@@ -12,10 +12,12 @@ import { ExchangeService } from '../src/modules/exchange/exchange.service.js';
 import { publicRoutes } from '../src/modules/public-api/public.routes.js';
 import { commandCenterRoutes } from '../src/modules/command-center/command.routes.js';
 import { AuditService } from '../src/services/audit.service.js';
+import { buildApp } from '../src/app.js';
+import cron from 'node-cron';
 
-const url = process.env.QR_TEST_DATABASE_URL || undefined;
+const url = process.env.QR_TEST_DATABASE_URL;
 // Hard guard: this suite deletes fixtures, and must never accept an application DB.
-if (url && new URL(url).pathname !== '/qr_integration_test') throw new Error('Use isolated qr_integration_test database only');
+if (url && !new URL(url).pathname.endsWith('/qr_integration_test')) throw new Error('Use isolated qr_integration_test database only');
 describe.skipIf(!url)('QR events on real PostgreSQL', () => {
   const prisma = new PrismaClient({datasources:{db:{url:url ?? 'postgresql://localhost:1/qr_integration_test'}}});
   const env = parseEnv({DATABASE_URL:url ?? 'postgresql://localhost:1/qr_integration_test',ADMIN_API_KEY:'0123456789abcdef',QR_ORDER_EVENTS_ENABLED:'true',COMMAND_CENTER_SERVICE_KEY:'test-service-key-at-least-32-characters',ROUND_SCHEDULER_ENABLED:'false'});
@@ -149,6 +151,79 @@ describe.skipIf(!url)('QR events on real PostgreSQL', () => {
     const next=await rounds.transitionRound(at(30));
     expect(Number(next!.prices[0]!.salesQuantity)).toBe(0);
   });
+  it('consumes manual and QR preview sources once, including recovery across ended rounds', async () => {
+    await prisma.exchangeSale.create({data:{roundId,exchangeProductId:productId,quantity:4,priceAtSale:1590,source:'MANUAL_PANEL'}});
+    await service.ingest(event(), at(6));
+    const preview = await rounds.simulateRound({startsAt:at(15)});
+    expect(Number(preview.round.prices[0]!.salesQuantity)).toBe(7);
+    await rounds.approveRound(preview.round.id);
+    await rounds.publishRound(preview.round.id);
+    expect((await rounds.getRound(roundId)).status).toBe('CLOSED');
+    expect(Number((await rounds.transitionRound(at(30)))!.prices[0]!.salesQuantity)).toBe(0);
+  });
+  it.each(['manual', 'acceptance', 'cancellation'])('rejects a preview after a new %s changes its captured demand', async (source) => {
+    const input = event();
+    await service.ingest(input, at(6));
+    const preview = await rounds.simulateRound({startsAt:at(15)});
+    await rounds.approveRound(preview.round.id);
+    if (source === 'manual') await prisma.exchangeSale.create({data:{roundId,exchangeProductId:productId,quantity:2,priceAtSale:1590,source:'MANUAL_PANEL'}});
+    if (source === 'acceptance') await service.ingest(event(), at(8));
+    if (source === 'cancellation') await service.ingest({...input,eventId:randomUUID(),eventType:'ORDER_CANCELLED',occurredAt:at(8).toISOString()},at(8));
+    await expect(rounds.publishRound(preview.round.id)).rejects.toMatchObject({statusCode:409});
+    expect((await rounds.getRound(roundId)).status).toBe('PUBLISHED');
+    expect(await prisma.exchangeOrderEvent.count({where:{processingStatus:'APPLIED'}})).toBe(0);
+    const next = await publish();
+    expect(Number(next!.prices[0]!.salesQuantity)).toBe(source === 'manual' ? 5 : source === 'acceptance' ? 6 : 0);
+  });
+  it('does not create an event or ACK when its receipt insert aborts the transaction', async () => {
+    await prisma.$executeRawUnsafe(`CREATE FUNCTION qr_test_abort_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected receipt failure'; END $$`);
+    await prisma.$executeRawUnsafe(`CREATE TRIGGER qr_test_abort_receipt BEFORE INSERT ON exchange_order_deliveries FOR EACH ROW EXECUTE FUNCTION qr_test_abort_receipt()`);
+    const input=event();
+    try {
+      await expect(service.ingest(input,at(6))).rejects.toThrow();
+      expect(await prisma.exchangeOrderEvent.count()).toBe(0);
+      expect(await prisma.exchangeOrderDelivery.count()).toBe(0);
+    } finally {
+      await prisma.$executeRawUnsafe('DROP TRIGGER qr_test_abort_receipt ON exchange_order_deliveries');
+      await prisma.$executeRawUnsafe('DROP FUNCTION qr_test_abort_receipt()');
+    }
+    expect(await service.ingest(input,at(7))).toMatchObject({accepted:true,alreadyProcessed:false});
+  });
+  it('accepts historical cancellation of an inactive product and preserves gross revenue', async () => {
+    const input=event(); await service.ingest(input,at(6)); await publish();
+    await prisma.exchangeProduct.update({where:{id:productId},data:{isActive:false,currentPrice:2000}});
+    await service.ingest({...input,eventId:randomUUID(),eventType:'ORDER_CANCELLED',occurredAt:at(17).toISOString()},at(17));
+    expect((await service.diagnostics(roundId)).reconciliation[0]).toMatchObject({qrQuantity:0});
+    const events=await prisma.exchangeOrderEvent.findMany();
+    expect(events.every(row=>row.unitPriceSnapshot.toFixed(2)==='1590.00')).toBe(true);
+    await rounds.transitionRound(at(30));
+    expect(await prisma.exchangeOrderEvent.count({where:{processingStatus:'HISTORICAL_ONLY'}})).toBe(1);
+  });
+  it('serializes QR delivery with bartender manual writes and leaves source quantities separate', async () => {
+    await prisma.priceRound.update({where:{id:roundId},data:{startsAt:new Date(Date.now()-60_000),endsAt:new Date(Date.now()+60_000)}});
+    const exchange=new ExchangeService(prisma,rounds,logger);
+    const bartender=new BartenderService(prisma,exchange,audit,logger);
+    await Promise.all([service.ingest(event({occurredAt:new Date().toISOString()})),...Array.from({length:4},()=>bartender.incrementSales(productId,1))]);
+    expect((await service.diagnostics(roundId)).reconciliation[0]).toMatchObject({manualQuantity:4,qrQuantity:3});
+  });
+  it('rolls back demand consumption with publication failure and recovers once', async () => {
+    await service.ingest(event(), at(6));
+    await prisma.$executeRawUnsafe(`CREATE FUNCTION qr_test_abort_price() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected publisher failure'; END $$`);
+    await prisma.$executeRawUnsafe(`CREATE TRIGGER qr_test_abort_price BEFORE UPDATE ON exchange_products FOR EACH ROW EXECUTE FUNCTION qr_test_abort_price()`);
+    try {
+      await expect(publish()).rejects.toThrow();
+      expect((await rounds.getRound(roundId)).status).toBe('PUBLISHED');
+      expect((await prisma.exchangeOrderEvent.findFirstOrThrow()).processingStatus).toBe('PENDING');
+      expect(await prisma.priceRound.count()).toBe(1);
+    } finally {
+      await prisma.$executeRawUnsafe('DROP TRIGGER qr_test_abort_price ON exchange_products');
+      await prisma.$executeRawUnsafe('DROP FUNCTION qr_test_abort_price()');
+    }
+    const recovered=await publish();
+    expect(Number(recovered!.prices[0]!.salesQuantity)).toBe(3);
+    expect((await publish())!.id).toBe(recovered!.id);
+    expect(Number((await rounds.transitionRound(at(30)))!.prices[0]!.salesQuantity)).toBe(0);
+  });
   it('returns a retryable HTTP error against an actually unavailable PostgreSQL port',async()=>{
     const offline=new PrismaClient({datasources:{db:{url:'postgresql://postgres:test@127.0.0.1:1/qr_integration_test?connect_timeout=1'}}});
     const app=fastify(); app.decorate('env',env); app.decorate('prisma',offline); await app.register(orderEventsRoutes);
@@ -156,27 +231,26 @@ describe.skipIf(!url)('QR events on real PostgreSQL', () => {
     expect(response.statusCode).toBe(503); expect(response.json().error.retryable).toBe(true);
     await app.close(); await offline.$disconnect();
   });
-  it('rejects a preview changed by a late cancellation without consuming either event',async()=>{
-    const input=event(); await service.ingest(input,at(6));
-    const preview=await rounds.simulateRound({startsAt:at(15)});
-    await rounds.approveRound(preview.round.id);
-    await service.ingest({...input,eventId:randomUUID(),eventType:'ORDER_CANCELLED',occurredAt:at(8).toISOString()},at(9));
-    await expect(rounds.publishRound(preview.round.id)).rejects.toMatchObject({code:'CONFLICT'});
-    expect(await prisma.exchangeOrderEvent.count({where:{processingStatus:'PENDING'}})).toBe(2);
-    expect((await prisma.priceRound.findUniqueOrThrow({where:{id:preview.round.id}})).status).toBe('APPROVED');
-    const automatic=await rounds.transitionRound(at(15));
-    expect(Number(automatic!.prices[0]!.salesQuantity)).toBe(0);
-  });
-  it('rolls back preview QR consumption when unclosed manual counters require automatic transition',async()=>{
-    await prisma.exchangeSale.create({data:{roundId,exchangeProductId:productId,quantity:2,priceAtSale:1590}});
-    await service.ingest(event(),at(6));
-    const preview=await rounds.simulateRound({startsAt:at(15)});
-    await rounds.approveRound(preview.round.id);
-    await expect(rounds.publishRound(preview.round.id)).rejects.toMatchObject({code:'CONFLICT'});
-    expect(await prisma.exchangeOrderEvent.count({where:{processingStatus:'PENDING'}})).toBe(1);
-    const automatic=await rounds.transitionRound(at(15));
-    expect(Number(automatic!.prices[0]!.salesQuantity)).toBe(5);
-    const following=await rounds.transitionRound(at(30));
-    expect(Number(following!.prices[0]!.salesQuantity)).toBe(0);
+  it('boots the complete application with compatible HTTP plugins, CORS and bartender sessions', async () => {
+    const previous=process.env.DATABASE_URL;
+    process.env.DATABASE_URL=url;
+    const app=await buildApp({...env,NODE_ENV:'test',LOG_LEVEL:'silent',CORS_ORIGINS:['https://hostes.online','https://barboard-exchange.sovetovsultann.workers.dev']});
+    try {
+      for (const path of ['/health','/api/v1/public/snapshot','/docs/json','/docs/static/swagger-ui.css']) expect((await app.inject({url:path})).statusCode).toBe(200);
+      for (const origin of ['https://hostes.online','https://barboard-exchange.sovetovsultann.workers.dev']) {
+        const response=await app.inject({method:'OPTIONS',url:'/api/v1/public/snapshot',headers:{origin,'access-control-request-method':'GET'}});
+        expect(response.headers['access-control-allow-origin']).toBe(origin);
+      }
+      expect((await app.inject({url:'/health',headers:{origin:'https://untrusted.example'}})).headers['access-control-allow-origin']).toBeUndefined();
+      const login=await app.inject({method:'POST',url:'/api/v1/bartender/auth',payload:{pin:env.BARTENDER_PIN}});
+      expect(login.statusCode).toBe(200);
+      expect((await app.inject({url:'/api/v1/bartender/exchange/products',headers:{'x-bartender-token':login.json().token}})).statusCode).toBe(200);
+      expect((await app.inject({url:'/api/v1/command-center/order-events/diagnostics',headers:{'x-command-center-key':env.COMMAND_CENTER_SERVICE_KEY!}})).statusCode).toBe(200);
+      const task=cron.schedule('* * * * *',()=>{}, {scheduled:false});
+      task.start(); task.stop();
+    } finally {
+      await app.close();
+      if (previous===undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL=previous;
+    }
   });
 });

@@ -141,22 +141,21 @@ export class RoundsService {
       return { created: false, round: existing };
     }
 
-    const products = await this.prisma.exchangeProduct.findMany({
-      where: { isActive: true },
-      orderBy: { name: 'asc' },
+    const { products, sourceRounds, sales, qrPreview } = await this.prisma.$transaction(async (tx) => {
+      await lockExchange(tx);
+      const products = await tx.exchangeProduct.findMany({ where: { isActive: true }, orderBy: { name: 'asc' } });
+      const sourceRounds = await tx.priceRound.findMany({
+        where: { organizationId: organization.id, status: 'PUBLISHED', endsAt: { lte: window.startsAt } },
+        orderBy: { id: 'asc' },
+      });
+      const sales = await tx.exchangeSale.findMany({ where: { roundId: { in: sourceRounds.map((round) => round.id) } }, orderBy: { id: 'asc' } });
+      const qrPreview = await consumeQrDemand(tx, window.startsAt, false);
+      return { products, sourceRounds, sales, qrPreview };
     });
     if (products.length === 0) throw noExchangeProducts();
 
-    const currentRound = await this.prisma.priceRound.findFirst({
-      where: { status: 'PUBLISHED', startsAt: { lte: new Date() }, endsAt: { gt: new Date() } },
-      orderBy: { startsAt: 'desc' },
-    });
-    const sales = currentRound
-      ? await this.prisma.exchangeSale.findMany({ where: { roundId: currentRound.id } })
-      : [];
     const salesByProduct = new Map<string, number>();
     for (const sale of sales) if (sale.exchangeProductId) salesByProduct.set(sale.exchangeProductId, (salesByProduct.get(sale.exchangeProductId) ?? 0) + sale.quantity);
-    const qrPreview = await consumeQrDemand(this.prisma, window.startsAt, false);
     for (const [id, quantity] of qrPreview.quantities) salesByProduct.set(id, (salesByProduct.get(id) ?? 0) + Math.max(0, quantity));
     const totalSales = products.reduce(
       (sum, product) => sum + (salesByProduct.get(product.id) ?? 0),
@@ -209,6 +208,8 @@ export class RoundsService {
         calculationInput: {
           algorithm: 'discrete-price-levels-v1',
           qrDemandEventIds: qrPreview.ids,
+          manualSourceRoundIds: sourceRounds.map((round) => round.id),
+          manualSourceSales: sales.map((sale) => ({ id: sale.id, quantity: sale.quantity })),
           currentLevel,
           levelDelta,
           salesQuantity,
@@ -611,14 +612,7 @@ export class RoundsService {
       await lockExchange(tx);
       const latest = await tx.priceRound.findUniqueOrThrow({where:{id:round.id}});
       if (!canTransition(latest.status, 'PUBLISHED')) throw invalidRoundTransition(latest.status, 'PUBLISHED');
-      await applyQrPreview(tx, round.id, round.prices, latest.startsAt);
-      // Manual counters have no consumption ledger. Only automatic transition
-      // closes their source rounds atomically; explicit preview must not count
-      // them once now and once again on the next automatic transition.
-      const unclosedManual = await tx.exchangeSale.count({
-        where: { quantity: { gt: 0 }, round: { organizationId: latest.organizationId, status: 'PUBLISHED', endsAt: { lte: latest.startsAt } } },
-      });
-      if (unclosedManual) throw conflict('Unclosed manual sales require automatic round transition; preview publication would double-count demand');
+      await applyQrPreview(tx, round.id, round.prices);
       for (const price of round.prices) {
         await tx.roundPrice.update({
           where: { id: price.id },

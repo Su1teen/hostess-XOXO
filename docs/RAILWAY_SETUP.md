@@ -38,7 +38,7 @@ Docker не требуется: Railway собирает проект через
 NODE_ENV=production
 DATABASE_URL=<reference на Postgres>
 ADMIN_API_KEY=<длинный случайный ключ>
-CORS_ORIGINS=https://<ваш-cloudflare-домен>
+CORS_ORIGINS=https://hostes.online,https://<ваш-cloudflare-домен>
 APP_TIMEZONE=Asia/Almaty
 ```
 

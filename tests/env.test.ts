@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { parseEnv } from '../src/config/env.js';
 
 describe('iiko environment defaults', () => {
+  it('keeps QR ingestion opt-in and parses explicit rollout values', () => {
+    const base={DATABASE_URL:'postgresql://localhost/test',ADMIN_API_KEY:'1234567890abcdef'};
+    expect(parseEnv(base).QR_ORDER_EVENTS_ENABLED).toBe(false);
+    for (const value of ['true','YES','1',' on ']) expect(parseEnv({...base,QR_ORDER_EVENTS_ENABLED:value}).QR_ORDER_EVENTS_ENABLED).toBe(true);
+    for (const value of ['false','no','0','off']) expect(parseEnv({...base,QR_ORDER_EVENTS_ENABLED:value}).QR_ORDER_EVENTS_ENABLED).toBe(false);
+    expect(parseEnv({...base,CORS_ORIGINS:'https://hostes.online,https://barboard-exchange.sovetovsultann.workers.dev'}).CORS_ORIGINS).toEqual(['https://hostes.online','https://barboard-exchange.sovetovsultann.workers.dev']);
+  });
   it('IIKO_AUTH_API_KEY_FIELD defaults to apiLogin and menu path to /menu/by_id', () => {
     const env = parseEnv({
       DATABASE_URL: 'postgresql://localhost/test',

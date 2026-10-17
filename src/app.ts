@@ -1,6 +1,6 @@
 import { orderEventsRoutes } from './modules/command-center/order-events.routes.js';
 import { commandCenterRoutes } from './modules/command-center/command.routes.js';
-import fastify, { type FastifyInstance } from 'fastify';
+import fastify, { type FastifyInstance, type FastifyError } from 'fastify';
 import { getEnv, type AppEnv } from './config/env.js';
 import { AppError, internalError } from './lib/errors.js';
 import { sanitizeMessage } from './lib/redaction.js';
@@ -78,7 +78,7 @@ export async function buildApp(env: AppEnv = getEnv()): Promise<FastifyInstance>
 
   // Единый безопасный обработчик ошибок: наружу уходит только код и текст,
   // stack trace и внутренние детали остаются в логах.
-  app.setErrorHandler(async (error, request, reply) => {
+  app.setErrorHandler<FastifyError>(async (error, request, reply) => {
     if (error instanceof AppError) {
       request.log.warn(
         { requestId: request.id, code: error.code, details: error.details },
