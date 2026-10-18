@@ -13,6 +13,7 @@ Header: x-command-center-key = existing COMMAND_CENTER_SERVICE_KEY.
 Server-to-server only; never embed the credential in a QR URL or browser bundle.
 
 Example (substitute real IDs from the read-only snapshot):
+
 ```json
 {
   "eventId": "21da23d0-2028-4025-b181-5b3796b2a145",
@@ -35,23 +36,29 @@ Both event types require a positive integer quantity, at most PostgreSQL int max
 The round must have been published and belong to the selected organization. The product must have a RoundPrice in it. unitPrice must equal that published price before any loyalty deduction. Acceptance occurredAt must be inside [startsAt, endsAt); the original round can already be CLOSED when delivery arrives. Historical cancellations remain possible when a product has since become inactive.
 
 HTTP 200 ACK:
+
 ```json
-{"accepted":true,"alreadyProcessed":false,"eventId":"21da23d0-2028-4025-b181-5b3796b2a145","appliedToRound":null}
+{
+  "accepted": true,
+  "alreadyProcessed": false,
+  "eventId": "21da23d0-2028-4025-b181-5b3796b2a145",
+  "appliedToRound": null
+}
 ```
 
 appliedToRound is null while pending, or the consuming round UUID when known. Duplicate delivery returns accepted=true, alreadyProcessed=true and the incoming eventId. Delete/ack an outbox delivery only after a successful HTTP response AND accepted=true. Replay identical business fields, preserving occurredAt. Do not generate a new acceptance after a cancellation.
 
 Error envelope: accepted=false, error={code,retryable,message}. Retry with backoff/jitter when error.retryable=true, retaining the outbox record. Without a parseable envelope, retry network errors, 429 and 5xx. Malformed JSON/body-limit failures are permanent 4xx. A failed database transaction is never ACKed.
 
-| HTTP | Codes | Sender action |
-| --- | --- | --- |
-| 401 | UNAUTHORIZED | Fix credential; never put it in the browser |
-| 400 | INVALID_PAYLOAD / INVALID_QUERY | Dead-letter and fix payload |
-| 409 | EVENT_ID_CONFLICT / ORDER_ITEM_CONFLICT | Permanent; inspect identity reuse |
-| 409 | ACCEPTANCE_NOT_RECEIVED | Retry after acceptance; alert if predecessor never arrives |
-| 422 | ROUND_NOT_FOUND / VENUE_ROUND_MISMATCH / ROUND_NOT_PUBLISHED / PRODUCT_ROUND_MISMATCH / PRICE_MISMATCH / ROUND_TIME_MISMATCH / INVALID_EVENT_TIME / CANCELLATION_MISMATCH | Permanent; reconcile source record |
-| 503 | QR_EVENTS_DISABLED / DATABASE_UNAVAILABLE | Retry; keep the event in outbox |
-| 429 | rate limit | Retry with backoff |
+| HTTP | Codes                                                                                                                                                                     | Sender action                                              |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| 401  | UNAUTHORIZED                                                                                                                                                              | Fix credential; never put it in the browser                |
+| 400  | INVALID_PAYLOAD / INVALID_QUERY                                                                                                                                           | Dead-letter and fix payload                                |
+| 409  | EVENT_ID_CONFLICT / ORDER_ITEM_CONFLICT                                                                                                                                   | Permanent; inspect identity reuse                          |
+| 409  | ACCEPTANCE_NOT_RECEIVED                                                                                                                                                   | Retry after acceptance; alert if predecessor never arrives |
+| 422  | ROUND_NOT_FOUND / VENUE_ROUND_MISMATCH / ROUND_NOT_PUBLISHED / PRODUCT_ROUND_MISMATCH / PRICE_MISMATCH / ROUND_TIME_MISMATCH / INVALID_EVENT_TIME / CANCELLATION_MISMATCH | Permanent; reconcile source record                         |
+| 503  | QR_EVENTS_DISABLED / DATABASE_UNAVAILABLE                                                                                                                                 | Retry; keep the event in outbox                            |
+| 429  | rate limit                                                                                                                                                                | Retry with backoff                                         |
 
 Authentication is timing-safe and runs before processing. Existing key redaction is reused. Validated metadata is retained for audit; unvalidated raw bodies are not stored.
 
@@ -124,4 +131,24 @@ It uses a real local HTTP listener and the real Command Center checkout/outbox: 
 
 The public Hostess origin is `https://hostes.online`. Add it to XOXO `CORS_ORIGINS` while retaining other required trusted frontend origins. Service keys remain server-side and are not added to browser CORS headers.
 
+## Staff order view and published history (18 October 2026)
+
+The bartender workspace has a dedicated **QR-заказы** tab. Menu, guest, and table tabs now read the same Command Center records; the old browser-only demo checkout, fake guest wallet and placeholder table registry have been removed. The exchange tab and manual non-QR counters retain their existing workflow.
+
+`GET /api/v1/bartender/dining/orders?scope=active|recent` requires a valid expiring bartender PIN session. It exposes a fixed, XOXO-only projection in a PostgreSQL `READ ONLY` transaction: authoritative order ID/number, physical resource and zone, dining session, guest name (no phone), item snapshots and item type, immutable tiyn totals as decimal strings, cashback/expiry, processing status and the staff payment marker. It never exposes QR credentials, receipt capabilities, guest cookies, owner hashes or service keys. Responses are `no-store`. The session grants shift staff read access; edits remain in Command Center. No independent order/wallet state or write endpoint was added.
+
+The view groups table orders by **dining session**, not merely table number. Cancelled sums are excluded from displayed group totals; historical order amounts stay visible as snapshots. Anonymous orders remain anonymous and are never merged into an invented customer. Active and recent lists are bounded to 100 with explicit truncation notice. Each displayed total is labelled as a total of the displayed orders. Polling stops in background/hidden mode, refreshes on focus, and clears private records on logout. A failed read retains an explicitly stale last snapshot. No missing schema/connection is represented as an empty successful queue.
+
+Sequential rollout is supported: existing `exchange` item rows are read as `EXCHANGE` via `to_jsonb` until CC migration 0010 adds `item_type`. Regular menu reads return a safe 503 until `venue_menu_items` exists. CC continues owning every order/menu table; XOXO Prisma has no competing models or migrations. Existing event ingestion is unchanged, and CC emits events for EXCHANGE lines only.
+
+Public history at `/api/v1/public/history?limit=12` includes only rounds with `PUBLISHED`/`CLOSED`, non-null `publishedAt` in the past, and `startsAt <= now`. Prices are the non-null immutable `publishedPrice`, never mutable catalog price, calculated preview or sales counters. Payload is `{ generatedAt, timezone, currency, rounds: [{ id, startsAt, endsAt, publishedAt, prices: [{ productId, price }] }] }`, sorted oldest to newest, with at most 48 rounds. Amounts remain KZT to match the existing public snapshot; order amounts remain integer tiyn strings.
+
+Snapshot/products add `slug`, `volumeMl`, `imageUrl` without removing fields. Product photographs use an explicit local allowlist, with no user-controlled filesystem path. `npm run build` copies the existing photograph assets into `dist/assets`. `PUBLIC_API_ORIGIN` defaults to the verified XOXO Railway origin; override it for other deployments. Missing photographs remain null.
+
+The cross-service harness now checks an exchange order and a mixed order through real checkout/outbox/HTTP ACK/cancellation, compares the bartender read model against the same authoritative ID and exact amounts, and verifies that the regular line produces no exchange event.
+
 Existing schema drift corrected: the historical products(is_active) index is now represented in Prisma schema; no index is dropped or rebuilt.
+
+# XOXO shift read path
+
+The bartender QR order and menu panels read Command Center's canonical PostgreSQL records through `GET /api/service/v1/dine-in/orders?scope=active|recent` and `/menu`. XOXO sends `x-command-center-key` server-side using the existing shared `COMMAND_CENTER_SERVICE_KEY`; the bartender PIN session is still required on the browser-facing XOXO routes. `COMMAND_CENTER_READ_ORIGIN` points to Command Center. The XOXO exchange database is never queried for QR order totals. A missing key, incompatible deployment, or unavailable Command Center returns 503 instead of an invented empty queue.

@@ -31,6 +31,7 @@ export const envSchema = z
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     PORT: z.coerce.number().int().min(1).max(65535).default(3000),
     HOST: z.string().default('0.0.0.0'),
+    PUBLIC_API_ORIGIN: z.string().url().default('https://hostess-xoxo-production.up.railway.app'),
     APP_NAME: z.string().default('Bar Exchange Backend'),
     APP_TIMEZONE: z.string().default('Asia/Almaty'),
     LOG_LEVEL: z
@@ -55,6 +56,10 @@ export const envSchema = z
       (value) => !value || value.length >= 32,
       'Service key must be at least 32 characters',
     ),
+    COMMAND_CENTER_READ_ORIGIN: z
+      .string()
+      .url()
+      .default('https://hostess-command-center-production.up.railway.app'),
 
     // Auth и полное menu используют РАЗНЫЕ базы iiko Cloud API:
     //   auth: POST {IIKO_AUTH_BASE_URL}{IIKO_AUTH_PATH}

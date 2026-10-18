@@ -1,4 +1,4 @@
-import { BARTENDER_DEMO_SCRIPT } from './bartender-demo.js';
+import { BARTENDER_OPERATIONS_SCRIPT } from './bartender-operations.js';
 
 /**
  * HTML диагностической страницы. Никаких данных, ключей и внешних CDN здесь нет:
@@ -462,6 +462,32 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         .bt-demo-table .bt-demo-secondary { width: 100%; }
       }
       @media (max-width: 370px) { .bt-grid { width: 94%; gap: 7px; } .bt-card { padding: 10px; } .bt-prices .bt-now b { font-size: 18px; } .bt-demo-card, .bt-demo-variant { padding: 10px; } }
+      .bt-ops-head {display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:12px}
+      .bt-ops-head h3 {font-size:28px;letter-spacing:-.04em;margin:0}
+      .bt-ops-head p,.bt-ops-note {font-size:12px;color:var(--bt-muted);line-height:1.6}
+      .bt-ops-link {color:var(--bt-brass);font-size:13px;text-decoration:none;display:inline-block;padding:8px 0}
+      .bt-ops-tools {display:flex;flex-wrap:wrap;gap:10px;margin:16px 0 22px;align-items:center}
+      .bt-ops-tools input {flex:1;min-width:180px}
+      .bt-ops-tools select,.bt-ops-refresh {min-height:44px!important;background:var(--bt-surface-2)!important;color:var(--bt-text)!important;border:1px solid var(--bt-line)!important;border-radius:12px!important;padding:10px 14px!important;margin:0!important}
+      .bt-ops-warning {padding:12px 16px;border:1px solid #786244;border-radius:12px;background:#332b20;color:#edcf9c;line-height:1.6}
+      .bt-ops-empty {padding:36px 20px;text-align:center;border:1px dashed var(--bt-line);border-radius:16px;color:var(--bt-muted)}
+      .bt-order {background:var(--bt-surface);border:1px solid var(--bt-line);border-radius:16px;margin:10px 0;overflow:hidden}
+      .bt-order summary {cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:18px;padding:18px;min-height:80px}
+      .bt-order summary::-webkit-details-marker {display:none}
+      .bt-order summary>div {display:flex;flex-direction:column;gap:7px;min-width:0}
+      .bt-order summary>div:last-child {align-items:flex-end;flex-shrink:0}
+      .bt-order summary strong {font-size:16px}.bt-order small {display:block;color:var(--bt-muted);font-size:12px;line-height:1.5}
+      .bt-order-status {border:1px solid var(--bt-line);border-radius:7px;padding:3px 7px;font-size:11px;display:inline-block;color:var(--bt-muted)}
+      .bt-order-status.new {color:#cce8d0;background:#243b2e;border-color:#365b44}.bt-order-status.preparing {color:#ebd3a8;background:#403422;border-color:#665439}.bt-order-status.cancelled {color:#e8b6b1}
+      .bt-order-body {padding:0 18px 18px;border-top:1px solid var(--bt-line)}
+      .bt-order-guest {font-weight:600;margin:16px 0}.bt-order-items {list-style:none;margin:0;padding:0}
+      .bt-order-items li {display:flex;justify-content:space-between;align-items:center;gap:16px;padding:12px 0;border-bottom:1px solid var(--bt-line)}
+      .bt-order-items li>span {white-space:nowrap;font-variant-numeric:tabular-nums}
+      .bt-order-totals {display:grid;grid-template-columns:1fr auto;gap:8px;margin:18px 0;font-size:13px}.bt-order-totals dt {color:var(--bt-muted)}.bt-order-totals dd {margin:0;text-align:right;font-variant-numeric:tabular-nums}
+      .bt-ops-group {margin:24px 0}.bt-ops-group h4 {font-size:20px;margin:0}.bt-ops-menu {display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px}
+      .bt-ops-product {background:var(--bt-surface);border:1px solid var(--bt-line);border-radius:16px;overflow:hidden}.bt-ops-product img {width:100%;height:160px;object-fit:cover}.bt-ops-product>div {padding:18px}.bt-ops-product h4 {font-size:17px;margin:8px 0}.bt-ops-product p,.bt-ops-product small {color:var(--bt-muted)}.bt-ops-product b {display:block;margin-top:14px}
+      @media(max-width:600px) {.bt-ops-head {align-items:flex-start}.bt-ops-head h3 {font-size:23px}.bt-order summary {padding:14px;gap:10px}.bt-order summary strong {font-size:14px}.bt-order summary small {font-size:11px}.bt-order-body {padding:0 14px 14px}.bt-ops-tools input {flex-basis:100%}}
+      @media(prefers-reduced-motion:reduce) {#bartenderMode * {transition:none!important;scroll-behavior:auto!important}}
     </style>
   </head>
   <body>
@@ -634,6 +660,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         </div>
         <nav class="bt-tabs" aria-label="Разделы бармена">
           <button type="button" data-bt-tab="exchange" aria-selected="true">Биржа</button>
+          <button type="button" data-bt-tab="orders" aria-selected="false">QR-заказы</button>
           <button type="button" data-bt-tab="menu" aria-selected="false">Меню</button>
           <button type="button" data-bt-tab="clients" aria-selected="false">Гости</button>
           <button type="button" data-bt-tab="tables" aria-selected="false">Столы</button>
@@ -1678,7 +1705,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
         if (token()) { openMode(); }
       })();
     </script>
-    ${BARTENDER_DEMO_SCRIPT}
+${BARTENDER_OPERATIONS_SCRIPT}
   </body>
 </html>
 `;

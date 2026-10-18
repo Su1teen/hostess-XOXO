@@ -253,4 +253,23 @@ describe.skipIf(!url)('QR events on real PostgreSQL', () => {
       if (previous===undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL=previous;
     }
   });
+  it('publishes true history while excluding previews, rollback and future prices',async()=>{
+    const current=await prisma.priceRound.findUniqueOrThrow({where:{id:roundId},include:{prices:true}});
+    for(const [key,status,when,publishedAt] of [
+      ['preview','SIMULATED',at(15),null],
+      ['rolled','ROLLED_BACK',at(-15),at(-15)],
+      ['future','PUBLISHED',new Date(Date.now()+86400000),new Date()],
+      ['unpublished','PUBLISHED',at(-30),null],
+    ] as const){
+      await prisma.priceRound.create({data:{organizationId,roundKey:key,startsAt:when,endsAt:new Date(when.getTime()+900000),status,publishedAt,timezone:'Asia/Almaty',algorithmVersion:'test',triggerSource:'TEST',prices:{create:{exchangeProductId:productId,price:9999,publishedPrice:9999,calculatedPrice:9999,minPrice:1590,maxPrice:9999,priceStep:50,changePercent:0,calculationInput:{},calculationResult:{},status:'PUBLISHED'}}}});
+    }
+    await prisma.exchangeProduct.update({where:{id:productId},data:{currentPrice:3000}});
+    const app=fastify();app.decorate('env',env);app.decorate('prisma',prisma);await app.register(publicRoutes);
+    const response=await app.inject({url:'/api/v1/public/history?limit=48'});
+    expect(response.statusCode).toBe(200);
+    expect(response.json().rounds).toHaveLength(1);
+    expect(response.json().rounds[0]).toMatchObject({id:roundId,prices:[{productId,price:1590}]});
+    expect(await prisma.priceRound.findUniqueOrThrow({where:{id:roundId},include:{prices:true}})).toEqual(current);
+    await app.close();
+  });
 });

@@ -64,6 +64,8 @@ open http://localhost:3000/admin    # страница диагностики (R
 - `GET /api/v1/public/current-round` (legacy alias)
 - `GET /api/v1/public/prices` (legacy alias)
 - `GET /api/v1/public/products` — только активные биржевые товары
+- `GET /api/v1/public/history?limit=12` — до 48 завершённых/текущих опубликованных раундов, хронологически; без preview и будущих цен
+- `GET /api/v1/public/product-images/:slug` — проверенные фотографии товаров; абсолютные URL в snapshot используют `PUBLIC_API_ORIGIN`
 - `GET /api/v1/public/rounds/current` — опубликованный текущий раунд и цены
 - `GET /api/v1/public/rounds/next` — начало следующего раунда и countdown
 
@@ -85,6 +87,8 @@ open http://localhost:3000/admin    # страница диагностики (R
 
 - `POST /api/v1/bartender/auth`, `POST /api/v1/bartender/logout`
 - `GET /api/v1/bartender/exchange/products`, `GET /api/v1/bartender/exchange/status`
+- `GET /api/v1/bartender/dining/orders?scope=active|recent` — защищённое чтение заказов Command Center (до 100, с `hasMore`)
+- `GET /api/v1/bartender/dining/menu` — опубликованный сохраняемый каталог Command Center
 - `POST /api/v1/bartender/exchange/products/:id/price-preview` — расчёт без записи в БД
 - `POST /api/v1/bartender/exchange/products/:id/apply-price` — цена считается на сервере
 - `POST /api/v1/bartender/exchange/products/:id/sales/increment|decrement`

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { createServer, type Server } from 'node:http';
 import fastify from 'fastify';
 import { PrismaClient } from '@prisma/client';
 import { parseEnv } from '../src/config/env.js';
@@ -11,6 +12,8 @@ import { publicRoutes } from '../src/modules/public-api/public.routes.js';
 import { RoundsService } from '../src/modules/rounds/rounds.service.js';
 import { ExchangeService } from '../src/modules/exchange/exchange.service.js';
 import { AuditService } from '../src/services/audit.service.js';
+import { DiningReadService } from '../src/modules/bartender/dining-read.service.js';
+import { CommandCenterReadClient } from '../src/modules/bartender/command-center-read.client.js';
 
 // Only dedicated databases on this task's local PostgreSQL instance are used.
 const receiverUrl = process.env.CROSS_RECEIVER_DATABASE_URL ?? '';
@@ -39,6 +42,8 @@ const { pool } = await load('src/server/db/pool.ts');
 const { createQuote, checkout, changeStatus } = await load('src/server/dine-in/service.ts');
 const { drainOutbox } = await load('src/server/dine-in/outbox.ts');
 const prisma = new PrismaClient({ datasources: { db: { url: receiverUrl } } });
+const senderReadClient = new PrismaClient({ datasources: { db: { url: senderUrl } } });
+const diningRead = new DiningReadService(senderReadClient);
 const env = parseEnv({
   DATABASE_URL: receiverUrl,
   ADMIN_API_KEY: 'local-test-admin-0123456789',
@@ -50,6 +55,7 @@ const logger = { info: () => {}, warn: () => {}, error: () => {} };
 const rounds = new RoundsService(prisma, env, new AuditService(prisma, logger), logger);
 const exchange = new ExchangeService(prisma, rounds, logger);
 const app = fastify();
+let commandReadServer: Server | undefined;
 app.decorate('env', env);
 app.decorate('prisma', prisma);
 app.decorate('services', { rounds, exchange } as never);
@@ -114,6 +120,24 @@ try {
     },
   });
   process.env.EXCHANGE_API_ORIGIN = await app.listen({ host: '127.0.0.1', port: 0 });
+  const { handleBookingApi } = await load('src/server/guest/api.ts');
+  commandReadServer = createServer(async (request, response) => {
+    const result = await handleBookingApi(
+      new Request(`http://127.0.0.1${request.url}`, {
+        method: request.method,
+        headers: request.headers as HeadersInit,
+      }),
+    );
+    response.writeHead(result?.status ?? 404, Object.fromEntries(result?.headers ?? []));
+    response.end(result ? await result.text() : '');
+  });
+  await new Promise<void>((resolve) => commandReadServer!.listen(0, '127.0.0.1', resolve));
+  const address = commandReadServer.address();
+  assert.ok(address && typeof address !== 'string');
+  const remoteRead = new CommandCenterReadClient({
+    ...env,
+    COMMAND_CENTER_READ_ORIGIN: `http://127.0.0.1:${address.port}`,
+  });
   const owner = { guestId: null, hash: randomUUID() };
   const quote = await createQuote(owner, {
     qrToken: table.token,
@@ -121,6 +145,14 @@ try {
     redeemMinor: 0,
   });
   const order = await checkout(owner, { quoteId: quote.id, idempotencyKey: randomUUID() });
+  const firstRead = await diningRead.orders();
+  assert.equal(firstRead.orders[0]?.id, order.order.id);
+  assert.equal(firstRead.orders[0]?.payableMinor, '477000');
+  assert.equal(firstRead.orders[0]?.cashbackMinor, '0');
+  assert.equal(firstRead.orders[0]?.guestName, null);
+  assert.equal(firstRead.orders[0]?.items[0]?.itemType, 'EXCHANGE');
+  assert.equal(firstRead.orders[0]?.items[0]?.unitPriceMinor, '159000');
+  assert.equal((await remoteRead.orders()).orders[0]?.id, order.order.id);
   assert.equal(
     (await pool.query('SELECT count(*)::int AS n FROM integration_outbox')).rows[0].n,
     1,
@@ -159,6 +191,52 @@ try {
   assert.equal(diagnostics.statusCode, 200);
   assert.equal(diagnostics.json().reconciliation[0].qrQuantity, 0);
   assert.equal((await prisma.roundPrice.findFirstOrThrow()).publishedPrice!.toFixed(2), '1590.00');
+  assert.equal((await diningRead.orders()).orders.length, 0);
+  assert.equal((await diningRead.orders('recent')).orders[0]?.status, 'cancelled');
+  assert.equal((await remoteRead.orders('recent')).orders[0]?.status, 'cancelled');
+  // Persisted standard menu shares one authoritative order with exchange lines.
+  const menuItem = (
+    await pool.query(
+      `INSERT INTO venue_menu_items(venue_id,name,category,price_minor,published,is_available)
+    VALUES($1,'Test kitchen item','Kitchen',125050,true,true) RETURNING id`,
+      [table.venue_id],
+    )
+  ).rows[0];
+  assert.equal((await diningRead.menu()).items[0]?.priceMinor, '125050');
+  assert.equal((await remoteRead.menu()).items[0]?.priceMinor, '125050');
+  const mixedQuote = await createQuote(owner, {
+    qrToken: table.token,
+    items: [
+      { productId: product.id, quantity: 2 },
+      { productId: menuItem.id, itemType: 'REGULAR_MENU', quantity: 1 },
+    ],
+    redeemMinor: 0,
+  });
+  const mixed = await checkout(owner, { quoteId: mixedQuote.id, idempotencyKey: randomUUID() });
+  const mixedRead = (await diningRead.orders()).orders.find((o) => o.id === mixed.order.id)!;
+  assert.equal(mixedRead.items.length, 2);
+  assert.equal(mixedRead.payableMinor, '443050');
+  assert.equal(mixedRead.items.filter((i) => i.itemType === 'REGULAR_MENU').length, 1);
+  assert.equal((await remoteRead.orders()).orders[0]?.id, mixed.order.id);
+  assert.equal(
+    (
+      await pool.query('SELECT count(*)::int AS n FROM integration_outbox WHERE order_id=$1', [
+        mixed.order.id,
+      ])
+    ).rows[0].n,
+    1,
+  );
+  assert.deepEqual(await drainOutbox(), { delivered: 1, failed: 0 });
+  assert.equal(await prisma.exchangeOrderEvent.count(), 3);
+  await changeStatus(
+    mixed.order.id,
+    table.venue_id,
+    'e2e-manager',
+    undefined,
+    'Isolated mixed cancellation',
+  );
+  assert.deepEqual(await drainOutbox(), { delivered: 1, failed: 0 });
+  assert.equal(await prisma.exchangeOrderEvent.count(), 4);
   const next = await rounds.transitionRound(endsAt);
   assert.equal(Number(next!.prices[0]!.salesQuantity), 0);
   console.log(
@@ -166,7 +244,10 @@ try {
       result: 'PASS',
       senderSource: senderRoot,
       realHTTP: true,
-      checkoutOrders: 1,
+      checkoutOrders: 2,
+      mixedOrderSingleAuthoritativeId: true,
+      regularMenuExcludedFromDemand: true,
+      staffReadMatchesAuthoritativeOrder: true,
       receiverEvents: await prisma.exchangeOrderEvent.count(),
       outbox: (
         await pool.query(
@@ -182,7 +263,9 @@ try {
     }),
   );
 } finally {
+  await new Promise<void>((resolve) => commandReadServer?.close(() => resolve()) ?? resolve());
   await app.close();
   await pool.end();
   await prisma.$disconnect();
+  await senderReadClient.$disconnect();
 }

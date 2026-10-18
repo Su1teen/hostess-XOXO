@@ -7,6 +7,30 @@ const env = {
   PRICE_ROUND_INTERVAL_MINUTES: 15,
 };
 
+describe('published history and product media', () => {
+  it('bounds the history and selects only published timestamps and prices', async () => {
+    const app=fastify();
+    const findMany=vi.fn(async()=>[{id:'new',startsAt:new Date('2026-10-18T01:15:00Z'),endsAt:new Date('2026-10-18T01:30:00Z'),publishedAt:new Date('2026-10-18T01:15:00Z'),prices:[{exchangeProductId:'p',publishedPrice:1590}]},{id:'old',startsAt:new Date('2026-10-18T01:00:00Z'),endsAt:new Date('2026-10-18T01:15:00Z'),publishedAt:new Date('2026-10-18T01:00:00Z'),prices:[{exchangeProductId:'p',publishedPrice:1690}]}]);
+    app.decorate('env',env as never);app.decorate('prisma',{priceRound:{findMany}} as never);
+    await app.register(publicRoutes);
+    const response=await app.inject({url:'/api/v1/public/history?limit=2'});
+    expect(response.statusCode).toBe(200);
+    expect(response.json().rounds.map((r:{id:string})=>r.id)).toEqual(['old','new']);
+    expect(response.json().rounds[1].prices).toEqual([{productId:'p',price:1590}]);
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({take:2,where:expect.objectContaining({status:{in:['PUBLISHED','CLOSED']},publishedAt:expect.objectContaining({not:null})})}));
+    for(const query of ['limit=0','limit=49','limit=1.5'])expect((await app.inject({url:'/api/v1/public/history?'+query})).statusCode).toBe(400);
+    await app.close();
+  });
+  it('serves only allowlisted local photographs and no arbitrary path',async()=>{
+    const app=fastify();await app.register(publicRoutes);
+    const photo=await app.inject({url:'/api/v1/public/product-images/jameson'});
+    expect(photo.statusCode).toBe(200);expect(photo.headers['content-type']).toContain('image/jpeg');expect(photo.rawPayload.length).toBeGreaterThan(1000);
+    expect((await app.inject({url:'/api/v1/public/product-images/not-a-product'})).statusCode).toBe(404);
+    expect((await app.inject({url:'/api/v1/public/product-images/%2E%2E%2F.env'})).statusCode).toBe(400);
+    await app.close();
+  });
+});
+
 describe('public exchange API', () => {
   it('возвращает только активные биржевые товары', async () => {
     const app = fastify();

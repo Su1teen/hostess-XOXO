@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { API_PREFIX } from '../../config/constants.js';
 import { BARTENDER_TOKEN_HEADER } from './bartender.session.js';
+import { CommandCenterReadClient } from './command-center-read.client.js';
 
 const productParams = {
   type: 'object',
@@ -41,6 +42,31 @@ export async function bartenderRoutes(app: FastifyInstance): Promise<void> {
     preHandler: requireSession,
     schema: { tags: ['Bartender'] as string[] },
   };
+
+  // The PIN session grants read-only shift access. CC alone changes orders/payment/loyalty.
+  app.get<{ Querystring: { scope?: 'active' | 'recent' } }>(
+    `${API_PREFIX}/bartender/dining/orders`,
+    {
+      preHandler: requireSession,
+      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+      schema: {
+        tags: ['Bartender'],
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { scope: { type: 'string', enum: ['active', 'recent'], default: 'active' } },
+        },
+      },
+    },
+    async (request, reply) => {
+      reply.header('cache-control', 'no-store');
+      return new CommandCenterReadClient(app.env).orders(request.query.scope);
+    },
+  );
+  app.get(`${API_PREFIX}/bartender/dining/menu`, session, async (_request, reply) => {
+    reply.header('cache-control', 'no-store');
+    return new CommandCenterReadClient(app.env).menu();
+  });
 
   app.post<{ Body: { pin: string } }>(
     `${API_PREFIX}/bartender/auth`,
