@@ -257,10 +257,10 @@ describe('дискретные уровни цены — дополнитель�
   });
 
   it('двигает уровень ровно на один шаг: ноль продаж снижает цену', () => {
-    // Нулевой спрос возвращает цену к минимуму, одна продажа ничего не меняет,
-    // две и больше подтверждают спрос. Количество не ускоряет движение.
+    // Нулевой спрос возвращает цену к минимуму, любая продажа подтверждает
+    // спрос. Количество не ускоряет движение.
     expect(calculatePriceLevelDelta(0)).toBe(-10);
-    expect(calculatePriceLevelDelta(1)).toBe(0);
+    expect(calculatePriceLevelDelta(1)).toBe(10);
     expect(calculatePriceLevelDelta(2)).toBe(10);
     expect(calculatePriceLevelDelta(5)).toBe(10);
     expect(calculatePriceLevelDelta(10)).toBe(10);
@@ -297,8 +297,8 @@ describe('Bud: 10 продаж за раунд → -20% / 1750 ₸', () => {
     );
   });
 
-  it('1 продажа не подтверждает спрос, 2 — подтверждают', () => {
-    expect(clampPriceLevel(-30 + calculatePriceLevelDelta(1))).toBe(-30);
+  it('любая продажа подтверждает спрос', () => {
+    expect(clampPriceLevel(-30 + calculatePriceLevelDelta(1))).toBe(-20);
     expect(clampPriceLevel(-30 + calculatePriceLevelDelta(2))).toBe(-20);
   });
 });

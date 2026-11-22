@@ -25,8 +25,12 @@ export function calculateDemandScore(quantity: MoneyInput, average: MoneyInput):
   return sales.minus(avg).div(Decimal.max(avg, 1)).clamp(-1, 1);
 }
 
-/** Минимальное количество продаж, при котором спрос считается активным. */
-export const EXCHANGE_MIN_SALES_FOR_DEMAND = 2;
+/**
+ * Минимальное количество продаж, при котором спрос считается активным.
+ * Любой заказ за раунд (QR, Command Center, бармен) поднимает цену на шаг:
+ * при пороге 2 тихий бар навсегда застревал на minPrice.
+ */
+export const EXCHANGE_MIN_SALES_FOR_DEMAND = 1;
 
 /** Шаг уровня: за один раунд цена двигается ровно на 10 процентных пунктов. */
 export const PRICE_LEVEL_STEP = 10;

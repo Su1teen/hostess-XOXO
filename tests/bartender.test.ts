@@ -69,8 +69,8 @@ describe('ручная скидка бармена', () => {
 });
 
 describe('спрос биржи', () => {
-  it('игнорирует продажи меньше 2 штук', () => {
-    expect(calculateExchangeDemandScore(1, 0.5).toNumber()).toBe(0);
+  it('считает спрос с первой продажи', () => {
+    expect(calculateExchangeDemandScore(1, 0.5).toNumber()).toBe(0.5);
     expect(calculateExchangeDemandScore(0, 0).toNumber()).toBe(0);
   });
 
