@@ -1,6 +1,7 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "npm ci && npm run db:generate && npm run build"
+# --include=dev: NODE_ENV=production on Railway makes plain `npm ci` skip devDependencies (tsc, prisma CLI).
+buildCommand = "npm ci --include=dev && npm run db:generate && npm run build"
 
 [deploy]
 preDeployCommand = "npm run db:migrate:deploy"
